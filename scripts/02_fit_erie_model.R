@@ -224,6 +224,7 @@ results <- bind_cols(subject_visits, bind_rows(fit_list))
 refit_flagged <- function(i, seeds, maxit) {
   sid <- results$subject_id[i]; vis <- results$visit[i]
   set.seed(string_seed(paste(sid, vis, "retry")))
+  cat(sid, vis, "(retry)\n")   # same per-item progress visibility as fit_one() above
   fit_subject_visit(sid, vis, extra_seeds = seeds, maxit = maxit)
 }
 
