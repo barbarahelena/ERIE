@@ -106,11 +106,16 @@ data <- concentrations %>%
 baseline_12C <- data %>% filter(isotope == "12C", time_min == 0) %>%
   select(subject_id, visit, baseline_mgL = conc_mgL)
 
-data_fit <- data %>%
+data_corrected <- data %>%
   left_join(baseline_12C, by = c("subject_id", "visit")) %>%
   mutate(conc_mgL = if_else(isotope == "12C", conc_mgL - baseline_mgL, conc_mgL)) %>%
-  filter(time_min > 0) %>%
   select(-baseline_mgL)
+
+# t=0 carries no fitting information (12C is 0 by construction after baseline
+# correction; 13C6 hasn't been dosed yet), so it's excluded here - but
+# data_corrected itself keeps t=0, so plot_subject_fit() below (which reads
+# from data_corrected, not data_fit) still shows the observed point.
+data_fit <- data_corrected %>% filter(time_min > 0)
 
 subject_visits <- data_fit %>% distinct(subject_id, visit) %>% arrange(subject_id, visit)
 
@@ -288,7 +293,7 @@ simulate_fit <- function(sid, vis, r) {
 }
 
 plot_subject_fit <- function(sid) {
-  obs <- data_fit %>% filter(subject_id == sid) %>% select(visit, isotope, time_min, conc_mgL)
+  obs <- data_corrected %>% filter(subject_id == sid) %>% select(visit, isotope, time_min, conc_mgL)
   fits <- results %>% filter(subject_id == sid, !is.na(ka))
   if (nrow(fits) == 0) return(NULL)
 
@@ -318,10 +323,10 @@ plot_subject_fit <- function(sid) {
     labs(title = sid, x = "Time (min)", y = "Concentration (mg/L)") +
     theme_Publication() +
     # theme_Publication()'s strip.text isn't size-reduced like axis text is;
-    # at full base_size the long isotope labels ("Fructose 13C6 (labelled)")
-    # clip against the narrow right-margin row strip facet_grid uses. Only
-    # override here, not in the shared theme, since facet_wrap panels
-    # elsewhere don't have this narrow-strip problem.
+    # at full base_size the isotope labels ("Fructose 13C6") clip against
+    # the narrow right-margin row strip facet_grid uses. Only override
+    # here, not in the shared theme, since facet_wrap panels elsewhere
+    # don't have this narrow-strip problem.
     theme(strip.text.y = element_text(size = rel(0.75)))
 }
 
