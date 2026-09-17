@@ -44,11 +44,12 @@ the label when it's present and parses cleanly, and only falls back to the
 position rule (`<= 35` -> FCT1, `> 35` -> FCT2) when it isn't - e.g. the
 since-corrected typo in raw column 34 of `ERIE_fructose_13C.csv`
 (previously `"FCT -  34"`, missing the "1"), which the position rule
-recovered from while the typo existed. The cleaning script also compares
-label vs. position for every column and `warning()`s on any disagreement,
-since - now that the label is trusted when available - a real mismatch
-would silently change which visit a column's data is assigned to rather
-than being caught.
+recovered from while the typo existed.
+
+Once resolved to `FCT1`/`FCT2`, the value is recoded to `baseline`/
+`intervention` - that's the coded `visit` value used everywhere downstream
+(`erie_concentrations.csv`, `erie_covariates.csv`, and every script that
+reads them). `FCT1`/`FCT2` stays raw-file vocabulary only.
 
 ## Inconsistent decimal marks across files
 
@@ -158,11 +159,13 @@ established.
 previously unused by this pipeline) gives one row per subject: `Diet` = `A`
 or `B`. Diet A is low fructose, with calories matched by glucose
 supplementation; Diet B is high fructose. This is a subject-level
-assignment, fixed across FCT1/FCT2 (the diet intervention happens *between*
-the two visits, not during them), so it's joined into `erie_covariates.csv`
+assignment, fixed across baseline/intervention (the diet intervention
+happens *between* the two visits, not during them), so it's joined into
+`erie_covariates.csv`
 by `subject_id` alone, not `subject_id + visit`. Used by
-`scripts/03_diet_summary.R` for the diet-arm comparison plot and parameter
-table; the PK fitting itself (`02_fit_erie_model.R`) doesn't need it.
+`scripts/03_diet_summary.R` for the diet-arm comparison plot, parameter
+table, and paired baseline-vs-intervention comparison (per diet arm); the
+PK fitting itself (`02_fit_erie_model.R`) doesn't need it.
 
 ## Output files
 

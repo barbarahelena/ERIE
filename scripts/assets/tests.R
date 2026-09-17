@@ -91,11 +91,11 @@ check("time_to_clearance() finds the point a decaying curve drops below frac*pea
 # ---- string_seed(): deterministic and, for this project's real keys, distinct
 
 check("string_seed() is deterministic (same key -> same seed)", {
-  string_seed("ER07 FCT2") == string_seed("ER07 FCT2")
+  string_seed("ER07 intervention") == string_seed("ER07 intervention")
 })
 
 check("string_seed() gives distinct seeds for all 70 ERIE subject x visit keys", {
-  keys <- as.vector(outer(sprintf("ER%02d", 1:35), c("FCT1", "FCT2"), paste))
+  keys <- as.vector(outer(sprintf("ER%02d", 1:35), c("baseline", "intervention"), paste))
   seeds <- vapply(keys, string_seed, integer(1))
   length(unique(seeds)) == length(keys)
 })

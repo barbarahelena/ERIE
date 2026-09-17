@@ -50,7 +50,7 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 
 # Plot labels: readable names and consistent colors.
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C (unlabelled)", "13C6" = "Fructose 13C6 (labelled)")
-VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
+VISIT_LABELS   <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
 DIET_LABELS    <- c(low_fructose = "Diet A: low fructose", high_fructose = "Diet B: high fructose")
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
 FINE_T_DIET <- seq(0, 400, by = 2)
@@ -105,8 +105,52 @@ param_table <- bind_rows(
 
 dir.create("results", showWarnings = FALSE)
 write_csv(param_table, "results/diet_parameter_summary.csv")
-cat("=== Parameter summary by diet x visit (reliable fits only) ===\n")
-print(as.data.frame(param_table), digits = 3)
+
+# ---- Baseline vs intervention comparison, per diet arm (paired) -----------
+#
+# A subject only enters a parameter's paired comparison if BOTH their
+# baseline and intervention fit are reliable for that parameter (same
+# reliable_* columns as above) - a paired test needs a complete pair, and a
+# subject reliable at one visit but not the other would otherwise silently
+# get compared against a value that shouldn't be trusted.
+
+compare_before_after <- function(param, reliable_col) {
+  fits %>%
+    filter(.data[[reliable_col]]) %>%
+    select(subject_id, diet, visit, value = all_of(param)) %>%
+    pivot_wider(names_from = visit, values_from = value) %>%
+    filter(!is.na(baseline), !is.na(intervention)) %>%
+    group_by(diet) %>%
+    group_modify(~ {
+      delta <- .x$intervention - .x$baseline
+      n <- nrow(.x)
+      tt <- if (n >= 2) t.test(.x$intervention, .x$baseline, paired = TRUE) else NULL
+      tibble(
+        n = n,
+        mean_baseline      = mean(.x$baseline),
+        mean_intervention  = mean(.x$intervention),
+        mean_delta         = mean(delta),
+        se_delta           = if (n >= 2) sd(delta) / sqrt(n) else NA_real_,
+        t_stat             = if (!is.null(tt)) unname(tt$statistic) else NA_real_,
+        df                 = if (!is.null(tt)) unname(tt$parameter) else NA_real_,
+        p_value            = if (!is.null(tt)) tt$p.value else NA_real_,
+        ci95_lower         = if (!is.null(tt)) tt$conf.int[1] else NA_real_,
+        ci95_upper         = if (!is.null(tt)) tt$conf.int[2] else NA_real_
+      )
+    }) %>%
+    ungroup() %>%
+    mutate(parameter = param, .before = 1)
+}
+
+before_after_table <- bind_rows(
+  compare_before_after("ka",  "reliable_shared"),
+  compare_before_after("kel", "reliable_shared"),
+  compare_before_after("F_12C", "reliable_12C"),
+  compare_before_after("F_13C6", "reliable_13C6"),
+  compare_before_after("capsule_dissolution_halflife_min", "reliable_13C6")
+) %>% arrange(parameter, diet)
+
+write_csv(before_after_table, "results/diet_before_after_comparison.csv")
 
 # ---- Average concentration-time curves per diet x visit x isotope ---------
 
@@ -133,7 +177,7 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
   )
 }
 
-diet_curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("FCT1", "FCT2"), isotope = c("12C", "13C6")) %>%
+diet_curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("baseline", "intervention"), isotope = c("12C", "13C6")) %>%
   pmap_dfr(function(diet, visit, isotope) {
     ac <- average_curve_isotope(diet, visit, isotope)
     if (is.null(ac)) return(NULL)
@@ -143,8 +187,9 @@ diet_curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c(
 # facet_grid (isotope x visit), not facet_wrap, so each ISOTOPE ROW gets its
 # own free y-scale shared across the two visit columns - the 12C and 13C6
 # curves differ by ~1000x in concentration (same reason 02_fit_erie_model.R's
-# per-subject plots use free scales), but FCT1 vs FCT2 for the same isotope
-# are on a comparable scale and are usefully left directly comparable.
+# per-subject plots use free scales), but baseline vs intervention for the
+# same isotope are on a comparable scale and are usefully left directly
+# comparable.
 p <- ggplot(diet_curves, aes(time_min, mean_conc, color = diet, fill = diet)) +
   geom_ribbon(aes(ymin = mean_conc - sem_conc, ymax = mean_conc + sem_conc), alpha = 0.2, color = NA) +
   geom_line(linewidth = 0.9) +
@@ -156,5 +201,4 @@ p <- ggplot(diet_curves, aes(time_min, mean_conc, color = diet, fill = diet)) +
        x = "Time (min)", y = "Concentration (mg/L)") +
   theme_Publication()
 
-ggsave("results/diet_summary_curves.png", p, width = 10, height = 7, dpi = 150)
-cat("\nSaved results/diet_summary_curves.png and results/diet_parameter_summary.csv\n")
+ggsave("results/diet_summary_curves.pdf", p, width = 10, height = 7, dpi = 150)
