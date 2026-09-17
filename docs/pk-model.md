@@ -349,6 +349,37 @@ What's different in this version:
   every subject - see "Volume of distribution" above for what this changes
   and why it isn't a straightforward improvement.
 
+### R² is lower than the former model's, and that's expected, not a regression
+
+Running `scripts/04_compare_to_former_model.R` (`pixi run compare-former`)
+against the former model's own saved results
+(`former_models/MixedModel/Results/fit_results_joint.csv`) shows this
+version's classical R² (`1 - SSE/SS_tot`) is **lower for most subjects**,
+not higher: median 12C R² 0.93 -> 0.85 (worse for 64/68 subjects), median
+13C6 R² 0.79 -> 0.54 (worse for 67/68 subjects). Full per-subject numbers
+in `results/r2_comparison_vs_former_model.csv`, a scatter plot in
+`results/r2_comparison_plot.pdf`.
+
+This is not the adaptive retry pass failing, or a fitting bug - it's a
+predictable consequence of the proportional weighting change (see
+"Fitting procedure" above). Classical R² is computed from *raw* squared
+error, which is exactly the quantity the former model's objective
+minimized - its fitting target and its evaluation metric were the same
+thing, so a high R² was close to guaranteed by construction. This model's
+objective deliberately minimizes *proportionally weighted* error instead,
+specifically to stop the peak from dominating each curve's fit at the
+tail's expense (see the ~24x squared-residual-scale finding that motivated
+it). That is a real change in what "good fit" means, not just a
+coefficient tweak - so it should be no surprise that raw-SSE R² looks worse
+under an objective that was never trying to maximize it. Whether the
+proportionally-weighted fit is actually *better* for this data (more
+accurate where it matters, e.g. the tail that drives `kel`) is a real
+question this comparison doesn't answer - it would need a fit-quality
+metric computed on the same weighted basis the model actually optimizes,
+which hasn't been built yet. Until then, don't read the lower R² alone as
+"the new model fits worse" - it's evaluating the new model by the old
+model's yardstick.
+
 ## References
 
 - Hannou SA, Haslam DE, McKeown NM, Herman MA. *Fructose metabolism and
