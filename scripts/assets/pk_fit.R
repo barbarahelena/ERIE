@@ -253,11 +253,21 @@ retry_seeds_near_bounds <- function(prior_par, bounds, flagged_params,
 #' @param mc.cores Cores to retry flagged rows across
 #'   (`parallel::mclapply()`); default 1 (sequential, works everywhere).
 #' @param verbose Print a one-line progress/outcome summary.
-#' @return `results`, with any strictly-improved rows replaced.
+#' @return `results`, with any strictly-improved rows replaced, plus two new
+#'   columns: `retried` (TRUE for every row this pass attempted) and
+#'   `retry_improved` (TRUE if the retry replaced the row, FALSE if it was
+#'   attempted but didn't beat the original, NA if never retried). A row
+#'   that was retried but not improved is informative on its own - it's
+#'   evidence the original result wasn't an under-searched local optimum,
+#'   e.g. a genuinely weak/low-information curve (rather than a search
+#'   failure) is expected to stay flagged even after a denser retry.
 adaptive_retry <- function(results, bound_cols, bounds, par_cols, refit_fn,
                             extra_flag_cols = character(0), convergence_col = NULL,
                             maxit_retry = 60, log_scale = character(0),
                             mc.cores = 1, verbose = TRUE) {
+  results$retried <- FALSE
+  results$retry_improved <- NA
+
   flag_cols <- c(names(bound_cols), extra_flag_cols)
   is_flagged <- if (length(flag_cols)) Reduce(`|`, lapply(flag_cols, function(col) results[[col]] %in% TRUE)) else FALSE
   not_converged <- if (!is.null(convergence_col)) results[[convergence_col]] %in% FALSE else FALSE
@@ -273,12 +283,17 @@ adaptive_retry <- function(results, bound_cols, bounds, par_cols, refit_fn,
     seeds <- retry_seeds_near_bounds(prior_par, bounds, flagged_params, log_scale = log_scale)
     refit_fn(i, seeds, maxit_retry)
   }
-  retried <- parallel::mclapply(flagged, retry_one, mc.cores = mc.cores)
+  retry_results <- parallel::mclapply(flagged, retry_one, mc.cores = mc.cores)
 
   n_improved <- 0
   for (j in seq_along(flagged)) {
-    i <- flagged[j]; new_row <- retried[[j]]
-    if (!is.na(new_row$objective_value) && new_row$objective_value < results$objective_value[i]) {
+    i <- flagged[j]; new_row <- retry_results[[j]]
+    results$retried[i] <- TRUE
+    improved <- !is.na(new_row$objective_value) && new_row$objective_value < results$objective_value[i]
+    results$retry_improved[i] <- improved
+    # new_row only carries the fit columns (ka, kel, ..., objective_value),
+    # not retried/retry_improved, so this can't clobber what was just set above.
+    if (improved) {
       results[i, names(new_row)] <- new_row
       n_improved <- n_improved + 1
     }

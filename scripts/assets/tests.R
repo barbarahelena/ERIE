@@ -163,4 +163,22 @@ check("adaptive_retry() also retries a row with no bound flag via extra_flag_col
     out$a[1] == 1 && out$a[3] == 3       # unflagged rows untouched
 })
 
+check("adaptive_retry()'s retried/retry_improved columns distinguish never-flagged, improved, and retried-but-not-improved", {
+  bounds <- list(a = c(0, 10), b = c(0, 1))
+  results <- tibble(a = c(1, 9.999, 3, 4), b = c(0.1, 0.5, 0.3, 0.5),
+                     a_at_bound = c(FALSE, TRUE, FALSE, FALSE),
+                     r2_low = c(FALSE, FALSE, FALSE, TRUE),
+                     objective_value = c(0.5, 0.9, 0.3, 0.9))
+  refit <- function(i, seeds, maxit) {
+    if (i == 2) return(tibble(a = 5, b = 0.5, a_at_bound = FALSE, r2_low = FALSE, objective_value = 0.1))
+    tibble(a = 99, b = 0.9, a_at_bound = FALSE, r2_low = TRUE, objective_value = 99)  # never beats the original
+  }
+  out <- adaptive_retry(results, bound_cols = c(a_at_bound = "a"), bounds = bounds, par_cols = c("a", "b"),
+                         extra_flag_cols = "r2_low", refit_fn = refit, mc.cores = 1, verbose = FALSE)
+  out$retried[1] == FALSE && is.na(out$retry_improved[1]) &&              # never flagged
+    out$retried[2] == TRUE && isTRUE(out$retry_improved[2]) && out$a[2] == 5 &&   # flagged + improved
+    out$retried[3] == FALSE && is.na(out$retry_improved[3]) &&            # never flagged
+    out$retried[4] == TRUE && isFALSE(out$retry_improved[4]) && out$a[4] == 4     # retried, not improved, original kept
+})
+
 cat("\nAll", n_pass, "tests passed.\n")
