@@ -1,0 +1,15 @@
+# Data
+data/
+
+# Admin
+admin/
+
+# former scripts
+former_models/
+
+# Results
+results/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
