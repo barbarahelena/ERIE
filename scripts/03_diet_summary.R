@@ -154,7 +154,8 @@ p <- ggplot(diet_curves, aes(time_min, mean_conc, color = diet, fill = diet)) +
   scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
   labs(title = "Mean fructose concentration by dietary arm",
        x = "Time (min)", y = "Concentration (mg/L)") +
-  theme_Publication()
+  theme_Publication() +
+  theme(strip.text.y = element_text(size = rel(0.75)))
 
 ggsave("results/diet_summary_curves.pdf", p, width = 10, height = 7, dpi = 150)
 cat("\nSaved results/diet_summary_curves.pdf and results/diet_parameter_summary.csv\n")
