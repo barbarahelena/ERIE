@@ -106,6 +106,52 @@ param_table <- bind_rows(
 dir.create("results", showWarnings = FALSE)
 write_csv(param_table, "results/diet_parameter_summary.csv")
 
+# ---- Baseline vs intervention comparison, per diet arm (paired) -----------
+#
+# A subject only enters a parameter's paired comparison if BOTH their
+# baseline and intervention fit are reliable for that parameter (same
+# reliable_* columns as above) - a paired test needs a complete pair, and a
+# subject reliable at one visit but not the other would otherwise silently
+# get compared against a value that shouldn't be trusted.
+
+compare_before_after <- function(param, reliable_col) {
+  fits %>%
+    filter(.data[[reliable_col]]) %>%
+    select(subject_id, diet, visit, value = all_of(param)) %>%
+    pivot_wider(names_from = visit, values_from = value) %>%
+    filter(!is.na(baseline), !is.na(intervention)) %>%
+    group_by(diet) %>%
+    group_modify(~ {
+      delta <- .x$intervention - .x$baseline
+      n <- nrow(.x)
+      tt <- if (n >= 2) t.test(.x$intervention, .x$baseline, paired = TRUE) else NULL
+      tibble(
+        n = n,
+        mean_baseline      = mean(.x$baseline),
+        mean_intervention  = mean(.x$intervention),
+        mean_delta         = mean(delta),
+        se_delta           = if (n >= 2) sd(delta) / sqrt(n) else NA_real_,
+        t_stat             = if (!is.null(tt)) unname(tt$statistic) else NA_real_,
+        df                 = if (!is.null(tt)) unname(tt$parameter) else NA_real_,
+        p_value            = if (!is.null(tt)) tt$p.value else NA_real_,
+        ci95_lower         = if (!is.null(tt)) tt$conf.int[1] else NA_real_,
+        ci95_upper         = if (!is.null(tt)) tt$conf.int[2] else NA_real_
+      )
+    }) %>%
+    ungroup() %>%
+    mutate(parameter = param, .before = 1)
+}
+
+before_after_table <- bind_rows(
+  compare_before_after("ka",  "reliable_shared"),
+  compare_before_after("kel", "reliable_shared"),
+  compare_before_after("F_12C", "reliable_12C"),
+  compare_before_after("F_13C6", "reliable_13C6"),
+  compare_before_after("capsule_dissolution_halflife_min", "reliable_13C6")
+) %>% arrange(parameter, diet)
+
+write_csv(before_after_table, "results/diet_before_after_comparison.csv")
+
 # ---- Average concentration-time curves per diet x visit x isotope ---------
 
 average_curve_isotope <- function(diet_val, vis, isotope) {
