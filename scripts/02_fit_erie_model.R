@@ -129,11 +129,12 @@ fit_curve_independent <- function(obs_time, obs_conc, dose, Vd) {
                   seeds = seeds)
 }
 
-# Joint fit: shared ka/kel, separate F per curve, 13C6 gets a delayed-release step
-fit_subject_visit <- function(sid, vis) {
+# Joint fit: shared ka/kel, separate F per curve, 13C6 gets a delayed-release
+# step. extra_seeds/maxit let the retry pass below reuse this function.
+fit_subject_visit <- function(sid, vis, extra_seeds = list(), maxit = 40) {
   empty <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA,
                    r2_12C = NA, r2_13C6 = NA, kel_at_bound = NA, k_release_at_bound = NA,
-                   converged = NA, r2_12C_low = NA, r2_13C6_low = NA)
+                   converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA)
 
   obs12 <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "12C")
   obs13 <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "13C6")
@@ -178,8 +179,8 @@ fit_subject_visit <- function(sid, vis) {
   lower <- vapply(BOUNDS_JOINT, `[`, numeric(1), 1)
   upper <- vapply(BOUNDS_JOINT, `[`, numeric(1), 2)
   fit <- fit_multistart(objective, lower, upper,
-                         seeds = c(informed_seeds, grid_seeds_joint, jitter_seeds),
-                         control = list(maxit = 40))
+                         seeds = c(informed_seeds, grid_seeds_joint, jitter_seeds, extra_seeds),
+                         control = list(maxit = maxit))
   if (is.null(fit)) return(empty)
 
   par <- fit$par
@@ -196,16 +197,10 @@ fit_subject_visit <- function(sid, vis) {
     r2_13C6 = r2_13C6,
     kel_at_bound = kel > (BOUNDS_JOINT$kel[2] - 1e-4),
     k_release_at_bound = par[["k_release"]] > (BOUNDS_JOINT$k_release[2] - 1e-4),
-    # optim()'s convergence code for the winning start: 0 means it actually
-    # converged, not just that it beat the other starts. A FALSE here means
-    # even the best of the multi-start seeds stopped early (e.g. hit maxit)
-    # rather than reaching a true local optimum - treat par with more caution.
-    converged = fit$convergence == 0,
-    # Per-curve reliability flag - does NOT imply the other curve, or the
-    # shared ka/kel from this joint fit, are also unreliable. See
-    # "Fit quality and what to trust" in docs/pk-model.md.
+    converged = fit$convergence == 0,   # see "Fit quality and what to trust" in docs/pk-model.md
     r2_12C_low  = r2_12C  < R2_RELIABLE_MIN,
-    r2_13C6_low = r2_13C6 < R2_RELIABLE_MIN
+    r2_13C6_low = r2_13C6 < R2_RELIABLE_MIN,
+    objective_value = fit$value   # for comparing against a retry; not meaningful across subjects
   )
 }
 
@@ -219,6 +214,28 @@ fit_one <- function(i) {
 
 fit_list <- parallel::mclapply(seq_len(nrow(subject_visits)), fit_one, mc.cores = N_CORES)
 results <- bind_cols(subject_visits, bind_rows(fit_list))
+
+# Adaptive retry for flagged fits (boundary/poor-fit/non-convergence) - see
+# "Adaptive retry" in docs/pk-model.md for why. Driver is generic
+# (scripts/assets/pk_fit.R); refit_flagged is the only ERIE-specific glue.
+refit_flagged <- function(i, seeds, maxit) {
+  sid <- results$subject_id[i]; vis <- results$visit[i]
+  set.seed(string_seed(paste(sid, vis, "retry")))
+  fit_subject_visit(sid, vis, extra_seeds = seeds, maxit = maxit)
+}
+
+results <- adaptive_retry(
+  results,
+  bound_cols = c(kel_at_bound = "kel", k_release_at_bound = "k_release"),
+  extra_flag_cols = c("r2_12C_low", "r2_13C6_low"),
+  convergence_col = "converged",
+  bounds = BOUNDS_JOINT,
+  par_cols = c("ka", "kel", "F_12C", "F_13C6", "k_release"),
+  refit_fn = refit_flagged,
+  log_scale = c("ka", "kel", "k_release"),
+  mc.cores = N_CORES
+)
+
 results$capsule_dissolution_halflife_min <- log(2) / results$k_release
 
 dir.create("results", showWarnings = FALSE)
