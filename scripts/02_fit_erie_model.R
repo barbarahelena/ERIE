@@ -53,7 +53,7 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 # Plot labels
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C (unlabelled)", "13C6" = "Fructose 13C6 (labelled)")
 ISOTOPE_COLORS <- c("12C" = "steelblue", "13C6" = "firebrick")
-VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
+VISIT_LABELS   <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
 
 # Config
 MIN_TMAX    <- 30     # min - soft floor on predicted Tmax for both curves
@@ -292,6 +292,6 @@ plot_subject_fit <- function(sid) {
 dir.create("results/plots_individual", showWarnings = FALSE, recursive = TRUE)
 for (sid in unique(results$subject_id[!is.na(results$ka)])) {
   p <- plot_subject_fit(sid)
-  if (!is.null(p)) ggsave(file.path("results/plots_individual", sprintf("%s_joint.png", sid)),
+  if (!is.null(p)) ggsave(file.path("results/plots_individual", sprintf("%s_joint.pdf", sid)),
                            p, width = 8, height = 5, dpi = 120)
 }
