@@ -45,14 +45,30 @@ string_seed <- function(key) {
   as.integer(h)
 }
 
-#' Build a normalized multi-curve objective function
+#' Build a normalized, proportionally-weighted multi-curve objective function
 #'
-#' Each curve contributes `sse / ss_tot` (i.e. 1 - that curve's own R^2) to
-#' the total, rather than raw squared error. This is essential whenever
-#' curves differ in concentration scale (e.g. a tracer dose vs. a much
-#' larger unlabeled dose): without normalizing, the larger-scale curve's
-#' error dominates the objective and the optimizer effectively ignores the
-#' smaller curve. Do not combine raw SSE across curves of different scale.
+#' Each curve contributes a weighted analog of `sse / ss_tot` (i.e. 1 - that
+#' curve's own weighted R^2) to the total, rather than raw squared error.
+#' Two separate normalizations are combined here:
+#'
+#'   1. ACROSS curves: dividing by each curve's own (weighted) total
+#'      variance is essential whenever curves differ in concentration scale
+#'      (e.g. a tracer dose vs. a much larger unlabeled dose) - without it,
+#'      the larger-scale curve's error dominates the objective and the
+#'      optimizer effectively ignores the smaller curve.
+#'   2. WITHIN a curve: points are weighted `1 / max(pred, floor)^2`
+#'      (proportional/constant-CV weighting, floored to avoid blow-up near
+#'      zero). Unweighted SSE lets the peak region dominate a single curve's
+#'      own fit - checking residuals from an unweighted fit against
+#'      predicted concentration showed squared-residual scale differing
+#'      ~24x between the top and bottom quartile of predicted concentration
+#'      (see docs/pk-model.md), which under-weights the tail even after the
+#'      cross-curve normalization above. `floor` is `weight_floor_frac`
+#'      times that curve's own observed Cmax.
+#'
+#' Because weights depend on `pred`, which changes every evaluation, the
+#' within-curve normalizer (`weighted_ss_tot`) is recomputed at every call
+#' rather than precomputed once from the observed data alone.
 #'
 #' Optionally adds two penalty terms per curve, evaluated on a fine time
 #' grid (not just the observed sampling times) so they can catch degenerate
@@ -80,19 +96,22 @@ string_seed <- function(key) {
 #'   observed Cmax (e.g. 0.10 = +/-10%), or NULL to disable.
 #' @param cmax_lambda Penalty weight applied to Cmax band violations.
 #' @param tmax_lambda Penalty weight applied to Tmax shortfalls.
+#' @param weight_floor_frac Floor on the within-curve weighting, as a
+#'   fraction of that curve's own observed Cmax.
 #' @return A function(theta) -> scalar objective value to minimize.
-build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20, tmax_lambda = 50) {
-  curves <- lapply(curves, function(cv) {
-    if (is.null(cv$ss_tot)) cv$ss_tot <- sum((cv$conc - mean(cv$conc))^2)
-    cv
-  })
-
+build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20,
+                                   tmax_lambda = 50, weight_floor_frac = 0.01) {
   function(theta) {
     total <- 0
     for (cv in curves) {
       pred <- tryCatch(cv$simulate(theta), error = function(e) NA_real_)
       if (length(pred) != length(cv$conc) || any(!is.finite(pred))) return(1e10)
-      total <- total + sum((pred - cv$conc)^2) / cv$ss_tot
+
+      floor_val <- weight_floor_frac * max(cv$conc)
+      w <- 1 / pmax(pred, floor_val)^2
+      w_mean_obs <- sum(w * cv$conc) / sum(w)
+      weighted_ss_tot <- sum(w * (cv$conc - w_mean_obs)^2)
+      total <- total + sum(w * (pred - cv$conc)^2) / weighted_ss_tot
 
       if (!is.null(cv$fine_simulate) && (!is.null(min_tmax) || !is.null(cmax_tol))) {
         fine <- tryCatch(cv$fine_simulate(theta), error = function(e) NULL)

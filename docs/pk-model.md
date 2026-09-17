@@ -173,12 +173,29 @@ defensible fit. Each subject x visit is fit in two stages:
    used only to generate informed starting points for stage 2.
 2. **Joint fit**, seeded from stage 1's estimates plus a systematic grid and
    random (log-uniform, for rate constants) starting points, minimizing a
-   *normalized* combined objective: each curve contributes `sse / ss_tot`
-   (equivalently, `1 - R²` for that curve alone) rather than raw squared
-   error. This normalization is essential - the 12C curve's concentrations
-   are roughly 1000x the 13C6 tracer's, so combining raw SSE lets 12C
-   dominate the objective and the optimizer effectively ignores 13C6
-   entirely.
+   *normalized, weighted* combined objective:
+   - **Across curves:** each curve contributes a weighted analog of
+     `sse / ss_tot` (roughly `1 - R²` for that curve alone) rather than raw
+     squared error. This normalization is essential - the 12C curve's
+     concentrations are roughly 1000x the 13C6 tracer's, so combining raw
+     SSE lets 12C dominate the objective and the optimizer effectively
+     ignores 13C6 entirely.
+   - **Within a curve:** points are weighted `1 / max(pred, floor)²`
+     (proportional/constant-CV weighting, floored at 1% of that curve's own
+     Cmax to avoid blow-up near zero). Checking residuals from an earlier,
+     unweighted version of this fit against predicted concentration showed
+     clear heteroscedasticity - squared-residual scale differed ~24x
+     between the top and bottom quartile of predicted concentration, for
+     both curves - meaning unweighted SSE was letting each curve's own peak
+     region dominate its fit even after the cross-curve normalization
+     above, at the expense of the tail (which carries most of the
+     information about `kel`). Relative residual variance was not fully
+     constant across concentration either (higher at low concentration than
+     pure proportional weighting assumes, consistent with a "combined"
+     additive+proportional error structure) - proportional weighting
+     corrects the dominant bias without fitting a full combined-error
+     model, which would be a larger undertaking for a modest additional
+     gain.
 
 Both stages reuse the same generic multi-start optimization engine
 (`scripts/assets/pk_fit.R`) - there is no separate, independently-maintained
