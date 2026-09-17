@@ -51,12 +51,21 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 }
 
 # Plot labels
-ISOTOPE_LABELS <- c("12C" = "Fructose 12C (unlabelled)", "13C6" = "Fructose 13C6 (labelled)")
+ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
 ISOTOPE_COLORS <- c("12C" = "steelblue", "13C6" = "firebrick")
 VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
 
 # Config
-MIN_TMAX    <- 30     # min - soft floor on predicted Tmax for both curves
+# MIN_TMAX loosened from 30 to 10 min: some subjects' real Tmax looks like
+# it's at or before the very first sample (t=30) - e.g. ER03 baseline 13C6
+# spikes at t=30 then crashes by t=90 - and a floor of 30 was structurally
+# preventing the optimizer from ever matching that, forcing a slower
+# compromise fit that was wrong almost everywhere (see the R2<0 discussion
+# in "Fit quality and what to trust" in docs/pk-model.md). 10 min still
+# rules out the genuinely degenerate near-instant-spike solutions the floor
+# was originally added for, without penalizing a real fast peak the sparse
+# 30-min-resolution sampling can't itself distinguish from an even earlier one.
+MIN_TMAX    <- 10     # min - soft floor on predicted Tmax for both curves
 CMAX_TOL    <- 0.10   # +/-10% soft band around each curve's own observed Cmax
 CMAX_LAMBDA <- 20     # penalty weight for the Cmax band
 TMAX_LAMBDA <- 50     # penalty weight for the Tmax floor
@@ -104,6 +113,18 @@ data_fit <- data %>%
   select(-baseline_mgL)
 
 subject_visits <- data_fit %>% distinct(subject_id, visit) %>% arrange(subject_id, visit)
+
+# Fast-testing mode: restrict to a handful of subjects for quick local
+# iteration (e.g. checking a config change) without waiting on the full
+# ~68-fit run. Set via `pixi run fit-model-test` or
+# ERIE_TEST_SUBJECTS="ER01,ER02,ER03" Rscript scripts/02_fit_erie_model.R -
+# unset (the default) runs every subject.
+test_subjects <- Sys.getenv("ERIE_TEST_SUBJECTS", unset = "")
+if (nzchar(test_subjects)) {
+  keep <- trimws(strsplit(test_subjects, ",")[[1]])
+  subject_visits <- subject_visits %>% filter(subject_id %in% keep)
+  cat("ERIE_TEST_SUBJECTS set - restricting to:", paste(keep, collapse = ", "), "\n")
+}
 
 # Fit each curve on its own (ignoring the other curve) to get a quick
 # ka/kel/F estimate. These are used as starting values for the slower joint
@@ -276,22 +297,37 @@ plot_subject_fit <- function(sid) {
     bind_cols(visit = row$visit, simulate_fit(sid, row$visit, row))
   })
 
-  # facet_wrap (not facet_grid) so each panel gets a fully independent scale -
-  # facet_grid shares the y-axis within a row, which would squash the much
-  # smaller 13C6 tracer curve flat against the 12C curve's larger scale.
+  # facet_grid, not facet_wrap: isotope as rows / visit as columns puts each
+  # variable's label on its own margin once (facet_wrap with two variables
+  # stacks both labels on every individual panel - redundant and cluttered).
+  # scales = "free" still gives each ROW (isotope) its own y-scale shared
+  # only across its two visit columns - the same pattern 03_diet_summary.R's
+  # diet plot already uses - so the ~1000x 12C/13C6 scale difference still
+  # can't squash one isotope flat against the other; only the two visits of
+  # the *same* isotope (a comparable scale) ever share an axis.
+  # No color legend: isotope is already fully conveyed by the facet rows
+  # (each row is exactly one isotope), so a color legend for the same
+  # variable would just be a second, redundant label - the color itself
+  # (via ISOTOPE_COLORS) stays, only its guide/legend is suppressed.
   ggplot(obs, aes(time_min, conc_mgL, color = isotope)) +
     geom_point() +
     geom_line(data = sim, linewidth = 0.8) +
-    facet_wrap(vars(visit, isotope), scales = "free", nrow = 2,
+    facet_grid(rows = vars(isotope), cols = vars(visit), scales = "free",
                labeller = labeller(visit = VISIT_LABELS, isotope = ISOTOPE_LABELS)) +
-    scale_color_manual(values = ISOTOPE_COLORS, labels = ISOTOPE_LABELS, name = "Fructose") +
+    scale_color_manual(values = ISOTOPE_COLORS, guide = "none") +
     labs(title = sid, x = "Time (min)", y = "Concentration (mg/L)") +
-    theme_Publication()
+    theme_Publication() +
+    # theme_Publication()'s strip.text isn't size-reduced like axis text is;
+    # at full base_size the long isotope labels ("Fructose 13C6 (labelled)")
+    # clip against the narrow right-margin row strip facet_grid uses. Only
+    # override here, not in the shared theme, since facet_wrap panels
+    # elsewhere don't have this narrow-strip problem.
+    theme(strip.text.y = element_text(size = rel(0.75)))
 }
 
 dir.create("results/plots_individual", showWarnings = FALSE, recursive = TRUE)
 for (sid in unique(results$subject_id[!is.na(results$ka)])) {
   p <- plot_subject_fit(sid)
-  if (!is.null(p)) ggsave(file.path("results/plots_individual", sprintf("%s_joint.png", sid)),
-                           p, width = 8, height = 5, dpi = 120)
+  if (!is.null(p)) ggsave(file.path("results/plots_individual", sprintf("%s_joint.pdf", sid)),
+                           p, width = 9, height = 5, dpi = 120)
 }

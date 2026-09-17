@@ -12,6 +12,11 @@ diet-summary = "Rscript scripts/03_diet_summary.R"
 pipeline = { depends-on = ["clean-data", "fit-model", "diet-summary"] }
 test-engine = "Rscript scripts/assets/tests.R"
 
+[tasks.fit-model-test]
+cmd = "Rscript scripts/02_fit_erie_model.R"
+description = "Fast local iteration: fits only ER01/ER02/ER03 instead of the full cohort"
+env = { ERIE_TEST_SUBJECTS = "ER01,ER02,ER03" }
+
 [dependencies]
 r-base = ">=4.5.3,<4.6"
 r-tidyverse = ">=2.0.0,<3"

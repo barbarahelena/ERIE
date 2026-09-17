@@ -146,11 +146,20 @@ per-kg version also would have).
 | `F_12C`, `F_13C6` | (0, 1) | Physical: a fraction of a dose. |
 | `k_release` | [0.001, 1] /min (t½ ≈ 0.7-700 min) | Wide enough to cover anything from near-instant to very slow capsule dissolution. |
 
-A soft penalty (predicted Tmax pulled above 30 min, weight `TMAX_LAMBDA`)
-rules out a specific degenerate failure mode: a spurious "early spike"
-solution where the model absorbs and clears almost instantly, producing a
-sharp early peak invisible between the sparse observed timepoints. A second
-soft penalty (predicted Cmax pulled toward observed Cmax +/-10%) discourages
+A soft penalty (predicted Tmax pulled above `MIN_TMAX` = 10 min, weight
+`TMAX_LAMBDA`) rules out a specific degenerate failure mode: a spurious
+"early spike" solution where the model absorbs and clears almost
+instantly, producing a sharp early peak invisible between the sparse
+observed timepoints. `MIN_TMAX` was originally 30 min (the first sampling
+time) but that turned out to be too strict: some subjects' real Tmax looks
+like it's at or before that first sample (e.g. ER03 baseline 13C6 spikes at
+t=30 then crashes by t=90), and a 30-min floor structurally prevented the
+optimizer from ever matching that, forcing a slower compromise fit that was
+wrong almost everywhere - see the R² < 0 discussion below. 10 min still
+rules out genuinely-degenerate near-instant spikes without penalizing a
+real fast peak the sparse sampling can't itself distinguish from an even
+earlier one. A second soft penalty (predicted Cmax pulled toward observed
+Cmax +/-10%) discourages
 systematic over/undershoot of the real peak without rigidly constraining
 the rest of the curve. Both are evaluated on a dense time grid, not just
 the observed sampling times, specifically because degenerate solutions are
@@ -277,6 +286,27 @@ curve can still bias them, so a low flag is a prompt to inspect that
 subject's plot, not just to drop the flagged curve's own parameter. With
 the current cohort this flags 9/68 fits on `r2_12C` and 22/68 on
 `r2_13C6`.
+
+**R² can be negative, and that's a real signal worth reading, not a display
+bug.** R² < 0 means the fitted curve has *more* raw squared error than
+simply predicting that curve's own mean at every point - worse than a flat
+line. This is possible here specifically because the fitting objective no
+longer minimizes raw SSE (which is what R² measures) - it minimizes
+*proportionally-weighted* SSE (see "Fitting procedure" above), and nothing
+in that objective prevents raw SSE from exceeding the flat-line baseline.
+A curve with a sharp peak and a long near-zero tail is exactly the shape
+where this bites: the near-zero tail points get very high relative weight,
+so the optimizer can trade a small proportional gain there for a large
+absolute loss at the peak, and the weighted objective barely notices while
+raw SSE (and R²) blow up. Concretely, ER03 baseline 13C6 (R² = -2.13) spikes
+to 0.34 mg/L at the first sample (t=30) and crashes to near-zero by t=90;
+the fit instead lands on a slow-everything solution (`ka`=0.014, `kel`
+=0.021, `k_release`=0.026, none near a bound) that peaks late around
+t=90-120 and is wrong almost everywhere - plausibly because a real Tmax at
+or before the first sample conflicts with `MIN_TMAX` (see "Fitting bounds"
+above, which is why that bound was loosened). A negative R² is worth
+opening that subject's plot for, not just distrusting the number in
+isolation.
 
 **Trustworthy as (approximately) absolute numbers:**
 - `kel`, `ka` - reasonably well-identified given the bounds and multi-start
