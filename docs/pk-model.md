@@ -213,6 +213,31 @@ order and core count, not against changes to either. Per-ID seeding makes
 each subject's fit reproducible regardless of `N_CORES` or the row order of
 `subject_visits`.
 
+**Adaptive retry for flagged fits.** Any subject×visit flagged after the
+standard pass above gets a second, denser retry: the prior estimate itself
+as a seed (so the retry can never end up worse), a systematic grid spanning
+the `kel`/`k_release` bound ranges (if either is the reason it's flagged),
+and 80 more random starts, at a higher `maxit`. This exists because the
+prior version of this model
+(`former_models/MixedModel/Scripts/fructose_joint_model_final.R`) found a
+subject stuck at the `kel` bound purely because the standard search kept
+landing on a worse local optimum that happened to sit exactly on the
+boundary - a substantially better solution existed comfortably inside the
+bound the whole time.
+
+The retry trigger is deliberately **not** "boundary flag alone": a fit
+stuck in the same kind of worse local optimum that happens to land
+comfortably *inside* the bounds would show no boundary flag at all, and
+look unremarkable - but is exactly what a poor R² or a non-converged fit
+would actually look like. So a subject×visit is retried if `kel_at_bound`,
+`k_release_at_bound`, `r2_12C_low`, `r2_13C6_low`, or `converged = FALSE` -
+any of them, not boundary flags only. The retry only replaces the original
+result if its objective value (`objective_value` in the results table - not
+comparable across subjects, only against that same subject's own
+prior/retry pair) is strictly better, so broadening the trigger this way
+can only improve results, at the cost of retrying more subjects (and
+therefore more runtime) than a boundary-only trigger would.
+
 ## Fit quality and what to trust
 
 Reproducing this model against `former_models/`'s own validated results
@@ -257,14 +282,15 @@ the current cohort this flags 9/68 fits on `r2_12C` and 22/68 on
   Report `F` as conditional on the Nadler blood-volume Vd assumption, not
   as a precise absolute bioavailability.
 - Any boundary-flagged parameter (`kel_at_bound` or `k_release_at_bound` =
-  TRUE in the results table) - the search may not have found the true
-  optimum, or the data may genuinely not constrain that parameter away from
-  the bound (e.g. `k_release` pinning at its ceiling simply because the
-  first post-dose sample already shows near-peak tracer concentration, and
-  nothing in the data argues for a slower dissolution rate - a
-  sampling-resolution limit, not an error). A boundary flag does not by
-  itself distinguish these two cases - that requires denser search near the
-  bound (not yet automated; see below) or inspecting the subject's plot.
+  TRUE in the results table) - even after the adaptive retry below, the data
+  may genuinely not constrain that parameter away from the bound (e.g.
+  `k_release` pinning at its ceiling simply because the first post-dose
+  sample already shows near-peak tracer concentration, and nothing in the
+  data argues for a slower dissolution rate - a sampling-resolution limit,
+  not an error). A boundary flag surviving the retry is more trustworthy
+  than one from a single pass, but still doesn't distinguish "genuinely
+  unconstrained by the data" from "search still didn't find it" - inspect
+  the subject's plot either way.
 - Any fit with `converged = FALSE` - the winning multi-start result did not
   actually satisfy `optim()`'s own convergence criterion (it just had the
   lowest objective value among the seeds tried), typically because it hit
