@@ -49,7 +49,7 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 }
 
 # Plot labels: readable names and consistent colors.
-ISOTOPE_LABELS <- c("12C" = "Fructose 12C (unlabelled)", "13C6" = "Fructose 13C6 (labelled)")
+ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
 VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
 DIET_LABELS    <- c(low_fructose = "Diet A: low fructose", high_fructose = "Diet B: high fructose")
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
@@ -156,5 +156,5 @@ p <- ggplot(diet_curves, aes(time_min, mean_conc, color = diet, fill = diet)) +
        x = "Time (min)", y = "Concentration (mg/L)") +
   theme_Publication()
 
-ggsave("results/diet_summary_curves.png", p, width = 10, height = 7, dpi = 150)
-cat("\nSaved results/diet_summary_curves.png and results/diet_parameter_summary.csv\n")
+ggsave("results/diet_summary_curves.pdf", p, width = 10, height = 7, dpi = 150)
+cat("\nSaved results/diet_summary_curves.pdf and results/diet_parameter_summary.csv\n")
