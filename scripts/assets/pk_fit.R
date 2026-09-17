@@ -121,10 +121,16 @@ build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax
 #' @param lower,upper Named numeric bound vectors.
 #' @param seeds List of named numeric starting vectors (same names/order as
 #'   `lower`/`upper`).
-#' @param control List passed through to `optim()`.
+#' @param control List passed through to `optim()`. If it doesn't already
+#'   set `parscale`, defaults to `upper - lower` per parameter - L-BFGS-B's
+#'   internal step sizing assumes roughly unit-scaled parameters, and
+#'   fitted PK parameters routinely span very different magnitudes (e.g.
+#'   rate constants ~1e-4-1 alongside fractions 0-1) without it.
 #' @return The best `optim()` result (a list with `par`, `value`, ...), or
 #'   NULL if every start failed.
 fit_multistart <- function(objective_fn, lower, upper, seeds, control = list(maxit = 100)) {
+  if (is.null(control$parscale)) control$parscale <- upper - lower
+
   best <- NULL
   for (start in seeds) {
     start <- pmax(pmin(start, upper * 0.99), lower * 1.01)
