@@ -146,15 +146,20 @@ per-kg version also would have).
 | `F_12C`, `F_13C6` | (0, 1) | Physical: a fraction of a dose. |
 | `k_release` | [0.001, 1] /min (t½ ≈ 0.7-700 min) | Wide enough to cover anything from near-instant to very slow capsule dissolution. |
 
-A hard rule (predicted Tmax >= 30 min) rules out a specific degenerate
-failure mode: a spurious "early spike" solution where the model absorbs and
-clears almost instantly, producing a sharp early peak invisible between the
-sparse observed timepoints. A soft penalty (predicted Cmax pulled toward
-observed Cmax +/-10%) discourages systematic over/undershoot of the real
-peak without rigidly constraining the rest of the curve. Both are evaluated
-on a dense time grid, not just the observed sampling times, specifically
-because degenerate solutions are designed (by the optimizer, inadvertently)
-to look fine only at the sparse observed points.
+A soft penalty (predicted Tmax pulled above 30 min, weight `TMAX_LAMBDA`)
+rules out a specific degenerate failure mode: a spurious "early spike"
+solution where the model absorbs and clears almost instantly, producing a
+sharp early peak invisible between the sparse observed timepoints. A second
+soft penalty (predicted Cmax pulled toward observed Cmax +/-10%) discourages
+systematic over/undershoot of the real peak without rigidly constraining
+the rest of the curve. Both are evaluated on a dense time grid, not just
+the observed sampling times, specifically because degenerate solutions are
+designed (by the optimizer, inadvertently) to look fine only at the sparse
+observed points. Both are also deliberately smooth (a squared
+shortfall/excess that is zero at and below the threshold, not a
+discontinuous jump) - `optim()`'s L-BFGS-B relies on finite-difference
+gradients, which a hard penalty boundary makes needlessly rough to search
+near.
 
 ## Fitting procedure
 
@@ -168,12 +173,29 @@ defensible fit. Each subject x visit is fit in two stages:
    used only to generate informed starting points for stage 2.
 2. **Joint fit**, seeded from stage 1's estimates plus a systematic grid and
    random (log-uniform, for rate constants) starting points, minimizing a
-   *normalized* combined objective: each curve contributes `sse / ss_tot`
-   (equivalently, `1 - R²` for that curve alone) rather than raw squared
-   error. This normalization is essential - the 12C curve's concentrations
-   are roughly 1000x the 13C6 tracer's, so combining raw SSE lets 12C
-   dominate the objective and the optimizer effectively ignores 13C6
-   entirely.
+   *normalized, weighted* combined objective:
+   - **Across curves:** each curve contributes a weighted analog of
+     `sse / ss_tot` (roughly `1 - R²` for that curve alone) rather than raw
+     squared error. This normalization is essential - the 12C curve's
+     concentrations are roughly 1000x the 13C6 tracer's, so combining raw
+     SSE lets 12C dominate the objective and the optimizer effectively
+     ignores 13C6 entirely.
+   - **Within a curve:** points are weighted `1 / max(pred, floor)²`
+     (proportional/constant-CV weighting, floored at 1% of that curve's own
+     Cmax to avoid blow-up near zero). Checking residuals from an earlier,
+     unweighted version of this fit against predicted concentration showed
+     clear heteroscedasticity - squared-residual scale differed ~24x
+     between the top and bottom quartile of predicted concentration, for
+     both curves - meaning unweighted SSE was letting each curve's own peak
+     region dominate its fit even after the cross-curve normalization
+     above, at the expense of the tail (which carries most of the
+     information about `kel`). Relative residual variance was not fully
+     constant across concentration either (higher at low concentration than
+     pure proportional weighting assumes, consistent with a "combined"
+     additive+proportional error structure) - proportional weighting
+     corrects the dominant bias without fitting a full combined-error
+     model, which would be a larger undertaking for a modest additional
+     gain.
 
 Both stages reuse the same generic multi-start optimization engine
 (`scripts/assets/pk_fit.R`) - there is no separate, independently-maintained
@@ -190,6 +212,31 @@ separate runs), and even the standard workaround
 order and core count, not against changes to either. Per-ID seeding makes
 each subject's fit reproducible regardless of `N_CORES` or the row order of
 `subject_visits`.
+
+**Adaptive retry for flagged fits.** Any subject×visit flagged after the
+standard pass above gets a second, denser retry: the prior estimate itself
+as a seed (so the retry can never end up worse), a systematic grid spanning
+the `kel`/`k_release` bound ranges (if either is the reason it's flagged),
+and 80 more random starts, at a higher `maxit`. This exists because the
+prior version of this model
+(`former_models/MixedModel/Scripts/fructose_joint_model_final.R`) found a
+subject stuck at the `kel` bound purely because the standard search kept
+landing on a worse local optimum that happened to sit exactly on the
+boundary - a substantially better solution existed comfortably inside the
+bound the whole time.
+
+The retry trigger is deliberately **not** "boundary flag alone": a fit
+stuck in the same kind of worse local optimum that happens to land
+comfortably *inside* the bounds would show no boundary flag at all, and
+look unremarkable - but is exactly what a poor R² or a non-converged fit
+would actually look like. So a subject×visit is retried if `kel_at_bound`,
+`k_release_at_bound`, `r2_12C_low`, `r2_13C6_low`, or `converged = FALSE` -
+any of them, not boundary flags only. The retry only replaces the original
+result if its objective value (`objective_value` in the results table - not
+comparable across subjects, only against that same subject's own
+prior/retry pair) is strictly better, so broadening the trigger this way
+can only improve results, at the cost of retrying more subjects (and
+therefore more runtime) than a boundary-only trigger would.
 
 ## Fit quality and what to trust
 
@@ -235,14 +282,15 @@ the current cohort this flags 9/68 fits on `r2_12C` and 22/68 on
   Report `F` as conditional on the Nadler blood-volume Vd assumption, not
   as a precise absolute bioavailability.
 - Any boundary-flagged parameter (`kel_at_bound` or `k_release_at_bound` =
-  TRUE in the results table) - the search may not have found the true
-  optimum, or the data may genuinely not constrain that parameter away from
-  the bound (e.g. `k_release` pinning at its ceiling simply because the
-  first post-dose sample already shows near-peak tracer concentration, and
-  nothing in the data argues for a slower dissolution rate - a
-  sampling-resolution limit, not an error). A boundary flag does not by
-  itself distinguish these two cases - that requires denser search near the
-  bound (not yet automated; see below) or inspecting the subject's plot.
+  TRUE in the results table) - even after the adaptive retry below, the data
+  may genuinely not constrain that parameter away from the bound (e.g.
+  `k_release` pinning at its ceiling simply because the first post-dose
+  sample already shows near-peak tracer concentration, and nothing in the
+  data argues for a slower dissolution rate - a sampling-resolution limit,
+  not an error). A boundary flag surviving the retry is more trustworthy
+  than one from a single pass, but still doesn't distinguish "genuinely
+  unconstrained by the data" from "search still didn't find it" - inspect
+  the subject's plot either way.
 - Any fit with `converged = FALSE` - the winning multi-start result did not
   actually satisfy `optim()`'s own convergence criterion (it just had the
   lowest objective value among the seeds tried), typically because it hit

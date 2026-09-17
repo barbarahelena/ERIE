@@ -56,9 +56,10 @@ ISOTOPE_COLORS <- c("12C" = "steelblue", "13C6" = "firebrick")
 VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
 
 # Config
-MIN_TMAX    <- 30     # min - hard floor on predicted Tmax for both curves
+MIN_TMAX    <- 30     # min - soft floor on predicted Tmax for both curves
 CMAX_TOL    <- 0.10   # +/-10% soft band around each curve's own observed Cmax
 CMAX_LAMBDA <- 20     # penalty weight for the Cmax band
+TMAX_LAMBDA <- 50     # penalty weight for the Tmax floor
 # kel: Hannou et al. 2018 (t1/2 ~ 7-140 min). ka: bounded only below in
 # spirit (absorption-rate differences are part of the research question).
 BOUNDS_INDEP <- list(ka = c(1e-4, 1), kel = c(0.005, 0.1), F = c(1e-4, 1))
@@ -70,12 +71,9 @@ N_RANDOM_JOINT <- 16
 FINE_T <- seq(0, 400, length.out = 50)    # grid for Tmax/Cmax penalty checks
 CLEARANCE_FRAC <- 0.01                    # "fully cleared", for plot x-axis limits only
 R2_RELIABLE_MIN <- 0.70                   # below this, that curve's fit is flagged unreliable
-N_CORES <- max(1, parallel::detectCores() - 2) # To parallelize loop
+N_CORES <- max(1, parallel::detectCores() - 4) # To parallelize loop
 
-# NOTE: no top-level set.seed() here - it would not actually make the
-# multi-start random seeds reproducible under parallel::mclapply() (see the
-# note in scripts/assets/pk_fit.R). Each subject x visit fit instead seeds
-# itself deterministically from its own ID in fit_one() below.
+# No top-level set.seed() - see pk_fit.R; each fit seeds itself in fit_one() below.
 
 # Load cleaned data
 concentrations <- read_csv("data/processed/erie_concentrations.csv", show_col_types = FALSE)
@@ -104,19 +102,16 @@ data_fit <- data %>%
 
 subject_visits <- data_fit %>% distinct(subject_id, visit) %>% arrange(subject_id, visit)
 
-# Fit each curve on its own (ignoring the other curve) to get a quick
-# ka/kel/F estimate. These are used as starting values for the slower joint
-# optimization below, instead of starting it from arbitrary guesses.
-# "On its own" just means calling build_joint_objective() with a list
-# containing only that one curve - the same function used for the joint
-# fit, so there's one fitting engine rather than two versions to keep in sync.
+# Quick single-curve pre-fit, used only to seed the joint fit below (same
+# build_joint_objective(), just with one curve - no separate engine).
 fit_curve_independent <- function(obs_time, obs_conc, dose, Vd) {
   curve <- list(
     times = obs_time, conc = obs_conc,
     simulate      = function(theta) bateman_conc(obs_time, theta[["ka"]], theta[["kel"]], theta[["F"]], dose, Vd),
     fine_simulate = function(theta) list(time = FINE_T, conc = bateman_conc(FINE_T, theta[["ka"]], theta[["kel"]], theta[["F"]], dose, Vd))
   )
-  objective <- build_joint_objective(list(curve), min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL, cmax_lambda = CMAX_LAMBDA)
+  objective <- build_joint_objective(list(curve), min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL,
+                                      cmax_lambda = CMAX_LAMBDA, tmax_lambda = TMAX_LAMBDA)
 
   seeds <- c(
     list(c(ka = 0.03, kel = 0.02, F = 0.3), c(ka = 0.08, kel = 0.05, F = 0.15),
@@ -129,11 +124,12 @@ fit_curve_independent <- function(obs_time, obs_conc, dose, Vd) {
                   seeds = seeds)
 }
 
-# Joint fit: shared ka/kel, separate F per curve, 13C6 gets a delayed-release step
-fit_subject_visit <- function(sid, vis) {
+# Joint fit: shared ka/kel, separate F per curve, 13C6 gets a delayed-release
+# step. extra_seeds/maxit let the retry pass below reuse this function.
+fit_subject_visit <- function(sid, vis, extra_seeds = list(), maxit = 40) {
   empty <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA,
                    r2_12C = NA, r2_13C6 = NA, kel_at_bound = NA, k_release_at_bound = NA,
-                   converged = NA, r2_12C_low = NA, r2_13C6_low = NA)
+                   converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA)
 
   obs12 <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "12C")
   obs13 <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "13C6")
@@ -159,7 +155,8 @@ fit_subject_visit <- function(sid, vis) {
   )
 
   objective <- build_joint_objective(list(curve_12C, curve_13C6),
-                                      min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL, cmax_lambda = CMAX_LAMBDA)
+                                      min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL,
+                                      cmax_lambda = CMAX_LAMBDA, tmax_lambda = TMAX_LAMBDA)
 
   mean_ka  <- mean(c(pre12$par[["ka"]],  pre13$par[["ka"]]))
   mean_kel <- mean(c(pre12$par[["kel"]], pre13$par[["kel"]]))
@@ -178,8 +175,8 @@ fit_subject_visit <- function(sid, vis) {
   lower <- vapply(BOUNDS_JOINT, `[`, numeric(1), 1)
   upper <- vapply(BOUNDS_JOINT, `[`, numeric(1), 2)
   fit <- fit_multistart(objective, lower, upper,
-                         seeds = c(informed_seeds, grid_seeds_joint, jitter_seeds),
-                         control = list(maxit = 40))
+                         seeds = c(informed_seeds, grid_seeds_joint, jitter_seeds, extra_seeds),
+                         control = list(maxit = maxit))
   if (is.null(fit)) return(empty)
 
   par <- fit$par
@@ -196,16 +193,10 @@ fit_subject_visit <- function(sid, vis) {
     r2_13C6 = r2_13C6,
     kel_at_bound = kel > (BOUNDS_JOINT$kel[2] - 1e-4),
     k_release_at_bound = par[["k_release"]] > (BOUNDS_JOINT$k_release[2] - 1e-4),
-    # optim()'s convergence code for the winning start: 0 means it actually
-    # converged, not just that it beat the other starts. A FALSE here means
-    # even the best of the multi-start seeds stopped early (e.g. hit maxit)
-    # rather than reaching a true local optimum - treat par with more caution.
-    converged = fit$convergence == 0,
-    # Per-curve reliability flag - does NOT imply the other curve, or the
-    # shared ka/kel from this joint fit, are also unreliable. See
-    # "Fit quality and what to trust" in docs/pk-model.md.
+    converged = fit$convergence == 0,   # see "Fit quality and what to trust" in docs/pk-model.md
     r2_12C_low  = r2_12C  < R2_RELIABLE_MIN,
-    r2_13C6_low = r2_13C6 < R2_RELIABLE_MIN
+    r2_13C6_low = r2_13C6 < R2_RELIABLE_MIN,
+    objective_value = fit$value   # for comparing against a retry; not meaningful across subjects
   )
 }
 
@@ -219,6 +210,28 @@ fit_one <- function(i) {
 
 fit_list <- parallel::mclapply(seq_len(nrow(subject_visits)), fit_one, mc.cores = N_CORES)
 results <- bind_cols(subject_visits, bind_rows(fit_list))
+
+# Adaptive retry for flagged fits (boundary/poor-fit/non-convergence) - see
+# "Adaptive retry" in docs/pk-model.md for why. Driver is generic
+# (scripts/assets/pk_fit.R); refit_flagged is the only ERIE-specific glue.
+refit_flagged <- function(i, seeds, maxit) {
+  sid <- results$subject_id[i]; vis <- results$visit[i]
+  set.seed(string_seed(paste(sid, vis, "retry")))
+  fit_subject_visit(sid, vis, extra_seeds = seeds, maxit = maxit)
+}
+
+results <- adaptive_retry(
+  results,
+  bound_cols = c(kel_at_bound = "kel", k_release_at_bound = "k_release"),
+  extra_flag_cols = c("r2_12C_low", "r2_13C6_low"),
+  convergence_col = "converged",
+  bounds = BOUNDS_JOINT,
+  par_cols = c("ka", "kel", "F_12C", "F_13C6", "k_release"),
+  refit_fn = refit_flagged,
+  log_scale = c("ka", "kel", "k_release"),
+  mc.cores = N_CORES
+)
+
 results$capsule_dissolution_halflife_min <- log(2) / results$k_release
 
 dir.create("results", showWarnings = FALSE)
@@ -255,9 +268,7 @@ plot_subject_fit <- function(sid) {
     bind_cols(visit = row$visit, simulate_fit(sid, row$visit, row))
   })
 
-  # facet_wrap (not facet_grid) so each panel gets a fully independent scale -
-  # facet_grid shares the y-axis within a row, which would squash the much
-  # smaller 13C6 tracer curve flat against the 12C curve's larger scale.
+  # facet_wrap, not facet_grid: independent y-scales per panel (12C/13C6 differ ~1000x)
   ggplot(obs, aes(time_min, conc_mgL, color = isotope)) +
     geom_point() +
     geom_line(data = sim, linewidth = 0.8) +
