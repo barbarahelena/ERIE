@@ -238,6 +238,23 @@ prior/retry pair) is strictly better, so broadening the trigger this way
 can only improve results, at the cost of retrying more subjects (and
 therefore more runtime) than a boundary-only trigger would.
 
+**A flagged fit is not automatically a search failure**, and the results
+table distinguishes this: `retried` (TRUE if this subject's fit was flagged
+and a denser retry was attempted) and `retry_improved` (TRUE if that retry
+found something strictly better, FALSE if the denser search was attempted
+but couldn't beat the original, NA if never flagged). A low-R² 13C6 curve
+in particular can be a genuinely weak, low-information fit rather than an
+under-searched one - e.g. a subject with especially slow/delayed capsule
+opening produces a 13C6 curve whose shape is dominated by `k_release`
+rather than by `ka`/`kel`, which can leave a broad, nearly-flat region of
+the objective surface where no parameter combination fits meaningfully
+better than any other. `retried = TRUE, retry_improved = FALSE` is exactly
+the signature of that: the denser search had every opportunity to find a
+better answer and didn't, which is evidence the flag reflects real curve
+weakness rather than an optimizer failure. `retried = TRUE, retry_improved
+= TRUE` is the opposite signature - the original result really was
+under-searched.
+
 ## Fit quality and what to trust
 
 Reproducing this model against `former_models/`'s own validated results
@@ -282,15 +299,15 @@ the current cohort this flags 9/68 fits on `r2_12C` and 22/68 on
   Report `F` as conditional on the Nadler blood-volume Vd assumption, not
   as a precise absolute bioavailability.
 - Any boundary-flagged parameter (`kel_at_bound` or `k_release_at_bound` =
-  TRUE in the results table) - even after the adaptive retry below, the data
+  TRUE in the results table) - even after the adaptive retry above, the data
   may genuinely not constrain that parameter away from the bound (e.g.
   `k_release` pinning at its ceiling simply because the first post-dose
   sample already shows near-peak tracer concentration, and nothing in the
   data argues for a slower dissolution rate - a sampling-resolution limit,
-  not an error). A boundary flag surviving the retry is more trustworthy
-  than one from a single pass, but still doesn't distinguish "genuinely
-  unconstrained by the data" from "search still didn't find it" - inspect
-  the subject's plot either way.
+  not an error). A boundary flag surviving the retry (`retried = TRUE,
+  retry_improved = FALSE`) is more trustworthy than one from a single pass,
+  but still doesn't distinguish "genuinely unconstrained by the data" from
+  "search still didn't find it" - inspect the subject's plot either way.
 - Any fit with `converged = FALSE` - the winning multi-start result did not
   actually satisfy `optim()`'s own convergence criterion (it just had the
   lowest objective value among the seeds tried), typically because it hit
