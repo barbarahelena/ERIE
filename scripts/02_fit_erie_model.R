@@ -56,9 +56,10 @@ ISOTOPE_COLORS <- c("12C" = "steelblue", "13C6" = "firebrick")
 VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
 
 # Config
-MIN_TMAX    <- 30     # min - hard floor on predicted Tmax for both curves
+MIN_TMAX    <- 30     # min - soft floor on predicted Tmax for both curves
 CMAX_TOL    <- 0.10   # +/-10% soft band around each curve's own observed Cmax
 CMAX_LAMBDA <- 20     # penalty weight for the Cmax band
+TMAX_LAMBDA <- 50     # penalty weight for the Tmax floor
 # kel: Hannou et al. 2018 (t1/2 ~ 7-140 min). ka: bounded only below in
 # spirit (absorption-rate differences are part of the research question).
 BOUNDS_INDEP <- list(ka = c(1e-4, 1), kel = c(0.005, 0.1), F = c(1e-4, 1))
@@ -116,7 +117,8 @@ fit_curve_independent <- function(obs_time, obs_conc, dose, Vd) {
     simulate      = function(theta) bateman_conc(obs_time, theta[["ka"]], theta[["kel"]], theta[["F"]], dose, Vd),
     fine_simulate = function(theta) list(time = FINE_T, conc = bateman_conc(FINE_T, theta[["ka"]], theta[["kel"]], theta[["F"]], dose, Vd))
   )
-  objective <- build_joint_objective(list(curve), min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL, cmax_lambda = CMAX_LAMBDA)
+  objective <- build_joint_objective(list(curve), min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL,
+                                      cmax_lambda = CMAX_LAMBDA, tmax_lambda = TMAX_LAMBDA)
 
   seeds <- c(
     list(c(ka = 0.03, kel = 0.02, F = 0.3), c(ka = 0.08, kel = 0.05, F = 0.15),
@@ -159,7 +161,8 @@ fit_subject_visit <- function(sid, vis) {
   )
 
   objective <- build_joint_objective(list(curve_12C, curve_13C6),
-                                      min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL, cmax_lambda = CMAX_LAMBDA)
+                                      min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL,
+                                      cmax_lambda = CMAX_LAMBDA, tmax_lambda = TMAX_LAMBDA)
 
   mean_ka  <- mean(c(pre12$par[["ka"]],  pre13$par[["ka"]]))
   mean_kel <- mean(c(pre12$par[["kel"]], pre13$par[["kel"]]))

@@ -73,11 +73,15 @@ string_seed <- function(key) {
 #' Optionally adds two penalty terms per curve, evaluated on a fine time
 #' grid (not just the observed sampling times) so they can catch degenerate
 #' solutions that look fine only at the sparse observed points:
-#'   - a hard floor on predicted Tmax (rules out spurious early-spike fits
+#'   - a soft floor on predicted Tmax (discourages spurious early-spike fits
 #'     where the peak occurs before absorption could plausibly complete)
 #'   - a soft band around the curve's own observed Cmax (discourages
 #'     systematic over/undershoot of the peak without rigidly constraining
 #'     the rest of the curve)
+#' Both are smooth (a squared shortfall/excess, zero at and below the
+#' threshold) rather than a discontinuous jump - `optim()`'s L-BFGS-B relies
+#' on finite-difference gradients, which a hard penalty boundary makes
+#' needlessly rough to search near.
 #'
 #' @param curves A list of curve specifications. Each element must have:
 #'   - `times`: numeric vector of observed times
@@ -86,16 +90,17 @@ string_seed <- function(key) {
 #'   and may optionally have:
 #'   - `fine_simulate`: function(theta) -> list(time = ..., conc = ...) on a
 #'     dense time grid, used only for the Tmax/Cmax penalties below
-#' @param min_tmax Hard floor on predicted Tmax (time units matching the
+#' @param min_tmax Soft floor on predicted Tmax (time units matching the
 #'   data), or NULL to disable. Requires `fine_simulate` on each curve.
 #' @param cmax_tol Fractional tolerance band around each curve's own
 #'   observed Cmax (e.g. 0.10 = +/-10%), or NULL to disable.
 #' @param cmax_lambda Penalty weight applied to Cmax band violations.
+#' @param tmax_lambda Penalty weight applied to Tmax shortfalls.
 #' @param weight_floor_frac Floor on the within-curve weighting, as a
 #'   fraction of that curve's own observed Cmax.
 #' @return A function(theta) -> scalar objective value to minimize.
 build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20,
-                                   weight_floor_frac = 0.01) {
+                                   tmax_lambda = 50, weight_floor_frac = 0.01) {
   function(theta) {
     total <- 0
     for (cv in curves) {
@@ -114,7 +119,8 @@ build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax
 
         if (!is.null(min_tmax)) {
           tmax <- fine$time[which.max(fine$conc)]
-          if (tmax < min_tmax) total <- total + 1e6 + (min_tmax - tmax)
+          shortfall <- max(0, min_tmax - tmax)
+          total <- total + tmax_lambda * shortfall^2
         }
         if (!is.null(cmax_tol)) {
           obs_cmax <- max(cv$conc)
@@ -140,10 +146,16 @@ build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax
 #' @param lower,upper Named numeric bound vectors.
 #' @param seeds List of named numeric starting vectors (same names/order as
 #'   `lower`/`upper`).
-#' @param control List passed through to `optim()`.
+#' @param control List passed through to `optim()`. If it doesn't already
+#'   set `parscale`, defaults to `upper - lower` per parameter - L-BFGS-B's
+#'   internal step sizing assumes roughly unit-scaled parameters, and
+#'   fitted PK parameters routinely span very different magnitudes (e.g.
+#'   rate constants ~1e-4-1 alongside fractions 0-1) without it.
 #' @return The best `optim()` result (a list with `par`, `value`, ...), or
 #'   NULL if every start failed.
 fit_multistart <- function(objective_fn, lower, upper, seeds, control = list(maxit = 100)) {
+  if (is.null(control$parscale)) control$parscale <- upper - lower
+
   best <- NULL
   for (start in seeds) {
     start <- pmax(pmin(start, upper * 0.99), lower * 1.01)

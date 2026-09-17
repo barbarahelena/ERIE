@@ -1,12 +1,7 @@
-# Diet-arm summary: average simulated concentration-time curves and a
-# parameter comparison table, split by dietary arm (A vs. B) and visit
-# (FCT1 = before diet, FCT2 = after diet). Reuses the fits already produced
-# by 02_fit_erie_model.R - does not refit anything.
-#
-# Diet A: low fructose, calories matched with glucose supplementation.
-# Diet B: high fructose.
+# Diet-arm summary plots
 # Barbara Verhaar
 
+# Libraries
 suppressMessages({
   library(readr)
   library(dplyr)
@@ -18,9 +13,10 @@ suppressMessages({
   library(stringr)
 })
 
+# Get functions
 source("scripts/assets/pk_curves.R")
 
-# House plotting theme
+# Theme
 theme_Publication <- function(base_size=14, base_family="sans") {
     suppressWarnings(theme_foundation(base_size=base_size, base_family=base_family)
         + theme(plot.title = element_text(face = "bold",
@@ -53,23 +49,13 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 }
 
 # Plot labels: readable names and consistent colors.
-# NOTE: also duplicated in 02_fit_erie_model.R - keep both in sync if changed.
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C (unlabelled)", "13C6" = "Fructose 13C6 (labelled)")
 VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
-# diet values are recoded from the raw "A"/"B" at the source, in
-# 01_clean_data.R - see erie_covariates.csv.
 DIET_LABELS    <- c(low_fructose = "Diet A: low fructose", high_fructose = "Diet B: high fructose")
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
-
-# Vd = estimated total blood volume (Nadler 1962, scripts/assets/pk_curves.R),
-# from each subject's own weight/height/sex - see "Volume of distribution"
-# in docs/pk-model.md.
 FINE_T_DIET <- seq(0, 400, by = 2)
 
-if (!file.exists("results/fit_results_joint.csv")) {
-  stop("results/fit_results_joint.csv not found - run scripts/02_fit_erie_model.R first.")
-}
-
+# Open data
 results      <- read_csv("results/fit_results_joint.csv", show_col_types = FALSE)
 covariates   <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE)
 constants    <- read_csv("data/processed/erie_constants.csv", show_col_types = FALSE)
@@ -78,10 +64,6 @@ dose_13C6_mg <- constants$value[constants$constant == "tracer_13C6_dose_mg"]
 fits <- results %>%
   left_join(covariates %>% select(subject_id, visit, bw_kg, height_cm, sex, diet), by = c("subject_id", "visit")) %>%
   filter(!is.na(ka))
-
-if (any(is.na(fits$diet))) {
-  warning(sum(is.na(fits$diet)), " fitted subject x visit rows have no diet assignment and are excluded from the diet summary")
-}
 
 fits <- fits %>%
   filter(!is.na(diet)) %>%
