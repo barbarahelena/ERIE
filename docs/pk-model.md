@@ -146,15 +146,20 @@ per-kg version also would have).
 | `F_12C`, `F_13C6` | (0, 1) | Physical: a fraction of a dose. |
 | `k_release` | [0.001, 1] /min (t½ ≈ 0.7-700 min) | Wide enough to cover anything from near-instant to very slow capsule dissolution. |
 
-A hard rule (predicted Tmax >= 30 min) rules out a specific degenerate
-failure mode: a spurious "early spike" solution where the model absorbs and
-clears almost instantly, producing a sharp early peak invisible between the
-sparse observed timepoints. A soft penalty (predicted Cmax pulled toward
-observed Cmax +/-10%) discourages systematic over/undershoot of the real
-peak without rigidly constraining the rest of the curve. Both are evaluated
-on a dense time grid, not just the observed sampling times, specifically
-because degenerate solutions are designed (by the optimizer, inadvertently)
-to look fine only at the sparse observed points.
+A soft penalty (predicted Tmax pulled above 30 min, weight `TMAX_LAMBDA`)
+rules out a specific degenerate failure mode: a spurious "early spike"
+solution where the model absorbs and clears almost instantly, producing a
+sharp early peak invisible between the sparse observed timepoints. A second
+soft penalty (predicted Cmax pulled toward observed Cmax +/-10%) discourages
+systematic over/undershoot of the real peak without rigidly constraining
+the rest of the curve. Both are evaluated on a dense time grid, not just
+the observed sampling times, specifically because degenerate solutions are
+designed (by the optimizer, inadvertently) to look fine only at the sparse
+observed points. Both are also deliberately smooth (a squared
+shortfall/excess that is zero at and below the threshold, not a
+discontinuous jump) - `optim()`'s L-BFGS-B relies on finite-difference
+gradients, which a hard penalty boundary makes needlessly rough to search
+near.
 
 ## Fitting procedure
 
