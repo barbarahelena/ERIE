@@ -57,11 +57,15 @@ string_seed <- function(key) {
 #' Optionally adds two penalty terms per curve, evaluated on a fine time
 #' grid (not just the observed sampling times) so they can catch degenerate
 #' solutions that look fine only at the sparse observed points:
-#'   - a hard floor on predicted Tmax (rules out spurious early-spike fits
+#'   - a soft floor on predicted Tmax (discourages spurious early-spike fits
 #'     where the peak occurs before absorption could plausibly complete)
 #'   - a soft band around the curve's own observed Cmax (discourages
 #'     systematic over/undershoot of the peak without rigidly constraining
 #'     the rest of the curve)
+#' Both are smooth (a squared shortfall/excess, zero at and below the
+#' threshold) rather than a discontinuous jump - `optim()`'s L-BFGS-B relies
+#' on finite-difference gradients, which a hard penalty boundary makes
+#' needlessly rough to search near.
 #'
 #' @param curves A list of curve specifications. Each element must have:
 #'   - `times`: numeric vector of observed times
@@ -70,13 +74,14 @@ string_seed <- function(key) {
 #'   and may optionally have:
 #'   - `fine_simulate`: function(theta) -> list(time = ..., conc = ...) on a
 #'     dense time grid, used only for the Tmax/Cmax penalties below
-#' @param min_tmax Hard floor on predicted Tmax (time units matching the
+#' @param min_tmax Soft floor on predicted Tmax (time units matching the
 #'   data), or NULL to disable. Requires `fine_simulate` on each curve.
 #' @param cmax_tol Fractional tolerance band around each curve's own
 #'   observed Cmax (e.g. 0.10 = +/-10%), or NULL to disable.
 #' @param cmax_lambda Penalty weight applied to Cmax band violations.
+#' @param tmax_lambda Penalty weight applied to Tmax shortfalls.
 #' @return A function(theta) -> scalar objective value to minimize.
-build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20) {
+build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20, tmax_lambda = 50) {
   curves <- lapply(curves, function(cv) {
     if (is.null(cv$ss_tot)) cv$ss_tot <- sum((cv$conc - mean(cv$conc))^2)
     cv
@@ -95,7 +100,8 @@ build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax
 
         if (!is.null(min_tmax)) {
           tmax <- fine$time[which.max(fine$conc)]
-          if (tmax < min_tmax) total <- total + 1e6 + (min_tmax - tmax)
+          shortfall <- max(0, min_tmax - tmax)
+          total <- total + tmax_lambda * shortfall^2
         }
         if (!is.null(cmax_tol)) {
           obs_cmax <- max(cv$conc)
