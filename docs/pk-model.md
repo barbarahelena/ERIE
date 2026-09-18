@@ -137,6 +137,21 @@ this model *alongside* the baseline for every subject x visit
 so both are available for comparison in `results/fit_results_baseline.csv`
 and `results/fit_results_lagged.csv`.
 
+**Known limitation, not yet addressed (TODO):**
+- **`MIN_TMAX` only checks the combined curve's single global maximum, not
+  each wave's own peak.** In the two-wave objective, `tmax12 <-
+  FINE_T[which.max(fine12)]` finds the timing of the *tallest* point on the
+  summed (wave 1 + wave 2) curve and checks only that against the 30-minute
+  floor. When wave 2 ends up taller than wave 1 (common in fitted results,
+  e.g. `ER01`, `ER09`) wave 1's own peak is left completely unconstrained -
+  it could land at an implausibly early, data-unsupported time without
+  triggering any penalty, exactly the degenerate-early-peak failure mode
+  `MIN_TMAX` was built to prevent in the first place, just now hiding in the
+  first wave instead of the model's one peak. Needs the `MIN_TMAX` check
+  applied to each wave's own local peak, not just the combined global max -
+  and needs an empirical check first (has any fitted subject's wave 1
+  actually landed early?) before deciding how to fix it.
+
 **Tested but deliberately not adopted (yet):**
 - **A two-lag onset-time extension** (`simulate_two_lag_dose()`, also in
   `pk_curves.R`) that gives the *first* wave its own fittable onset delay

@@ -57,7 +57,7 @@ DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
 FINE_T_DIET <- seq(0, 400, by = 2)
 
 # Open data
-results      <- read_csv("results/fit_results_baseline.csv", show_col_types = FALSE)
+results      <- read_csv("results/fit_results.csv", show_col_types = FALSE)
 covariates   <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE)
 constants    <- read_csv("data/processed/erie_constants.csv", show_col_types = FALSE)
 dose_13C6_mg <- constants$value[constants$constant == "tracer_13C6_dose_mg"]

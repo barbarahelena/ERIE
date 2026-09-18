@@ -85,8 +85,8 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
 ISOTOPE_COLORS <- c("12C" = "steelblue", "13C6" = "firebrick")
 VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
-MODEL_COLORS   <- c(baseline = "grey45", lagged = "firebrick")
-MODEL_LABELS   <- c(baseline = "Baseline", lagged = "Lagged second dose")
+DIET_LABELS    <- c(low_fructose = "Diet A: low fructose", high_fructose = "Diet B: high fructose")
+DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
 
 # Config
 MIN_TMAX    <- 30     # min - soft floor on predicted Tmax for both curves - see file header
@@ -116,9 +116,16 @@ BOUNDS_LAGGED <- list(ka = c(1e-4, 1), kel = c(0.005, 0.1),
                       # t_lag in 60-114 min, well inside this bound, so this
                       # doesn't constrain any real case found so far.
                       f_delayed = c(0.001, 0.999), t_lag = c(5, 150))
+# BOUNDS_LAGGED above stays as the "combined" 7-parameter view the generic
+# adaptive_retry() driver operates over (bound_cols/par_cols); the actual
+# two-stage fit below (fit_subject_visit_lagged()) uses these two subsets.
+BOUNDS_LAGGED_12C <- list(ka = c(1e-4, 1), kel = c(0.005, 0.1), F_12C = c(1e-4, 1),
+                          f_delayed = c(0.001, 0.999), t_lag = c(5, 150))
+BOUNDS_13C6_GIVEN_LAG <- list(F_13C6 = c(1e-4, 1), k_release = c(0.001, 1))
 N_RANDOM_INDEP <- 40
 N_RANDOM_JOINT <- 16
 N_RANDOM_LAGGED <- 60   # pilot-validated budget (ER01/ER03/ER09) - see results/model-post-peak-dip-pilot/
+N_RANDOM_13C6_GIVEN_LAG <- 40  # stage 2 is only 2-dim and cheap (no 12C simulation), so a generous budget
 FINE_T <- seq(0, 400, length.out = 50)    # grid for Tmax/Cmax penalty checks
 CLEARANCE_FRAC <- 0.01                    # "fully cleared", for plot x-axis limits only
 R2_RELIABLE_MIN <- 0.70                   # below this, that curve's fit is flagged unreliable
@@ -201,10 +208,11 @@ fit_curve_independent <- function(obs_time, obs_conc, dose, Vd) {
 # Baseline joint fit: shared ka/kel, separate F per curve, 13C6 gets a
 # delayed-release step. extra_seeds/maxit let the retry pass reuse this.
 # ---------------------------------------------------------------------------
-fit_subject_visit_baseline <- function(sid, vis, extra_seeds = list(), maxit = 40) {
+fit_subject_visit_single_wave <- function(sid, vis, extra_seeds = list(), maxit = 40) {
   empty <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA,
                    r2_12C = NA, r2_13C6 = NA, kel_at_bound = NA, k_release_at_bound = NA,
-                   converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA)
+                   converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA,
+                   rss_12C = NA, n_12C = NA, t30_present = NA)
 
   obs12 <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "12C")
   obs13 <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "13C6")
@@ -272,175 +280,333 @@ fit_subject_visit_baseline <- function(sid, vis, extra_seeds = list(), maxit = 4
     converged = fit$convergence == 0,   # see "Fit quality and what to trust" in docs/pk-model.md
     r2_12C_low  = r2_12C  < R2_RELIABLE_MIN,
     r2_13C6_low = r2_13C6 < R2_RELIABLE_MIN,
-    objective_value = fit$value   # for comparing against a retry; not meaningful across subjects
+    objective_value = fit$value,   # for comparing against a retry; not meaningful across subjects
+    rss_12C = sum((curve_12C$conc - pred12)^2),   # raw (unweighted, native mg/L^2) - for the single_wave-vs-two_wave AIC comparison below
+    n_12C = length(curve_12C$conc),
+    t30_present = any(obs12$time_min == 30)   # ka is poorly anchored without this sample - see fit_subject_visit_two_wave()
   )
 }
 
 # ---------------------------------------------------------------------------
-# Lagged-second-dose joint fit: same shared ka/kel/F/k_release structure as
-# baseline, plus a shared f_delayed/t_lag (see simulate_lagged_dose() in
-# pk_curves.R) - a fraction of each dose contributes nothing until t_lag,
-# then behaves like a fresh dose given at that later time. Shared across
-# curves because both doses are ingested by the same subject at the same
-# time and (per the pilot investigation) the trigger is plausibly an
-# upstream, shared gastric-emptying event, not something curve-specific.
+# Two-wave (lagged-second-dose) fit, in TWO STAGES rather than one joint optimization:
+#   Stage 1: fit ka, kel, f_delayed, t_lag, F_12C to 12C ALONE.
+#   Stage 2: with those FIXED, fit only F_13C6/k_release to 13C6.
+#
+# An earlier version shared f_delayed/t_lag symmetrically, informed by both
+# curves' own residuals in one joint objective - this turned out to be
+# unreliable. 13C6 already has its own dedicated onset-delay parameter
+# (k_release, the enteric capsule's dissolution rate); letting the SHARED
+# lag also be jointly informed by 13C6's residuals let 13C6's genuinely
+# different, k_release-explained slow onset get misattributed to a "second
+# wave" and imposed onto 12C even when 12C's own data gave zero support for
+# one. Confirmed concretely on ER32 FCT1 (12C's t=30 sample is already near
+# its eventual peak - no plausible onset delay - yet the shared fit still
+# pinned f_delayed~1, t_lag~19min, and made BOTH curves' R2 worse than the
+# plain baseline model) and ER35 (same pattern). 12C is the right curve to
+# derive the lag from on its own merits, not just to route around this
+# failure: it has a far larger, cleaner signal, and it's also the
+# physiologically primary trigger for a real biphasic-emptying event (the
+# large 1g/kg osmotic/caloric liquid load, not the tiny fixed 13C6 tracer),
+# so a genuine dip should show up in 12C's own data if it's real at all.
 # ---------------------------------------------------------------------------
-fit_subject_visit_lagged <- function(sid, vis, extra_seeds = list(), maxit = 80) {
+fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 80) {
   empty <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA,
                    f_delayed = NA, t_lag = NA,
                    r2_12C = NA, r2_13C6 = NA, kel_at_bound = NA, k_release_at_bound = NA,
-                   converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA)
+                   converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA,
+                   rss_12C = NA, n_12C = NA, t30_present = NA)
 
   obs12 <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "12C")
   obs13 <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "13C6")
   if (nrow(obs12) < 3 || nrow(obs13) < 3) return(empty)
+  # A genuine second wave in the 0-60min window can only be confirmed (or
+  # ruled out) against an actual t=30 sample - without it, that whole window
+  # has only its t=0 and t=60 endpoints to anchor a 5-parameter fit, which
+  # both under-identifies the model and removes the only data point that
+  # could tell a real early dip apart from an unconstrained one. Rather than
+  # let AIC quietly rubber-stamp whatever shape 5 sparse points can fit
+  # almost exactly, don't attempt two_wave at all when t=30 is missing -
+  # model selection below then has no two_wave candidate to prefer, so
+  # single_wave is used automatically. Found via ER05 FCT1 (t=30, 90, 150,
+  # 240 all missing - only 5 real points for 12C).
+  if (!any(obs12$time_min == 30)) return(mutate(empty, t30_present = FALSE))
 
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
   Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
   dose_12C <- cov$dose_12C_mg
 
-  objective <- function(theta) {
+  # ---- Stage 1: ka, kel, f_delayed, t_lag, F_12C from 12C alone ----
+  objective_12C <- function(theta) {
     simA <- function(t, dose) bateman_conc(t, theta[["ka"]], theta[["kel"]], theta[["F_12C"]], dose, Vd)
-    simB <- function(t, dose) simulate_delayed_release(t, theta[["k_release"]], theta[["ka"]], theta[["kel"]], theta[["F_13C6"]], dose, Vd)$conc
     pred12 <- tryCatch(simulate_lagged_dose(simA, obs12$time_min, dose_12C, theta[["f_delayed"]], theta[["t_lag"]]), error = function(e) NULL)
-    pred13 <- tryCatch(simulate_lagged_dose(simB, obs13$time_min, dose_13C6_mg, theta[["f_delayed"]], theta[["t_lag"]]), error = function(e) NULL)
-    if (is.null(pred12) || is.null(pred13) || any(!is.finite(pred12)) || any(!is.finite(pred13))) return(1e10)
+    if (is.null(pred12) || any(!is.finite(pred12))) return(1e10)
     ss_tot12 <- sum((obs12$conc_mgL - mean(obs12$conc_mgL))^2)
-    ss_tot13 <- sum((obs13$conc_mgL - mean(obs13$conc_mgL))^2)
-    total <- sum((pred12 - obs12$conc_mgL)^2) / ss_tot12 + sum((pred13 - obs13$conc_mgL)^2) / ss_tot13
+    total <- sum((pred12 - obs12$conc_mgL)^2) / ss_tot12
 
     fine12 <- simulate_lagged_dose(simA, FINE_T, dose_12C, theta[["f_delayed"]], theta[["t_lag"]])
-    fine13 <- simulate_lagged_dose(simB, FINE_T, dose_13C6_mg, theta[["f_delayed"]], theta[["t_lag"]])
-    if (any(!is.finite(fine12)) || any(!is.finite(fine13))) return(1e10)
-    tmax12 <- FINE_T[which.max(fine12)]; tmax13 <- FINE_T[which.max(fine13)]
-    total <- total + TMAX_LAMBDA * max(0, MIN_TMAX - tmax12)^2 + TMAX_LAMBDA * max(0, MIN_TMAX - tmax13)^2
-    obs_cmax12 <- max(obs12$conc_mgL); obs_cmax13 <- max(obs13$conc_mgL)
+    if (any(!is.finite(fine12))) return(1e10)
+    tmax12 <- FINE_T[which.max(fine12)]
+    total <- total + TMAX_LAMBDA * max(0, MIN_TMAX - tmax12)^2
+    obs_cmax12 <- max(obs12$conc_mgL)
     excess12 <- max(0, abs(max(fine12) - obs_cmax12) / obs_cmax12 - CMAX_TOL)
-    excess13 <- max(0, abs(max(fine13) - obs_cmax13) / obs_cmax13 - CMAX_TOL)
-    total + CMAX_LAMBDA * (excess12^2 + excess13^2)
+    total + CMAX_LAMBDA * excess12^2
   }
 
-  no_lag_seeds <- list(  # f_delayed near 0 should recover ~baseline
-    c(ka = 0.02, kel = 0.02, F_12C = 0.02, F_13C6 = 0.05, k_release = 0.05, f_delayed = 0.01, t_lag = 60),
-    c(ka = 0.05, kel = 0.03, F_12C = 0.01, F_13C6 = 0.10, k_release = 0.02, f_delayed = 0.01, t_lag = 90)
+  pre12 <- fit_curve_independent(obs12$time_min, obs12$conc_mgL, dose_12C, Vd)
+  informed_seed_12C <- if (!is.null(pre12)) {
+    list(c(ka = pre12$par[["ka"]], kel = pre12$par[["kel"]], F_12C = pre12$par[["F"]], f_delayed = 0.01, t_lag = 60))
+  } else list()
+  no_lag_seeds <- list(  # f_delayed near 0 should recover ~a plain Bateman fit
+    c(ka = 0.02, kel = 0.02, F_12C = 0.02, f_delayed = 0.01, t_lag = 60),
+    c(ka = 0.05, kel = 0.03, F_12C = 0.01, f_delayed = 0.01, t_lag = 90)
   )
   dip_seeds <- list(  # pilot-informed: real dip cases (ER01/ER09) converged near t_lag~90
-    c(ka = 0.05, kel = 0.02, F_12C = 0.02, F_13C6 = 0.05, k_release = 0.05, f_delayed = 0.5, t_lag = 60),
-    c(ka = 0.03, kel = 0.02, F_12C = 0.02, F_13C6 = 0.05, k_release = 0.05, f_delayed = 0.4, t_lag = 45),
-    c(ka = 0.06, kel = 0.03, F_12C = 0.015, F_13C6 = 0.08, k_release = 0.03, f_delayed = 0.35, t_lag = 75),
-    c(ka = 0.04, kel = 0.025, F_12C = 0.02, F_13C6 = 0.06, k_release = 0.04, f_delayed = 0.45, t_lag = 90)
+    c(ka = 0.05, kel = 0.02, F_12C = 0.02, f_delayed = 0.5, t_lag = 60),
+    c(ka = 0.03, kel = 0.02, F_12C = 0.02, f_delayed = 0.4, t_lag = 45),
+    c(ka = 0.06, kel = 0.03, F_12C = 0.015, f_delayed = 0.35, t_lag = 75),
+    c(ka = 0.04, kel = 0.025, F_12C = 0.02, f_delayed = 0.45, t_lag = 90)
   )
-  jitter_seeds <- random_seeds(N_RANDOM_LAGGED, BOUNDS_LAGGED, log_scale = c("ka", "kel", "k_release"))
-  seeds <- c(no_lag_seeds, dip_seeds, jitter_seeds, extra_seeds)
+  jitter_seeds_12C <- random_seeds(N_RANDOM_LAGGED, BOUNDS_LAGGED_12C, log_scale = c("ka", "kel"))
+  # extra_seeds (from the retry driver) carry all 7 combined-model parameter
+  # names - only the stage-1-relevant subset is used here.
+  extra_seeds_12C <- lapply(extra_seeds, function(s) s[c("ka", "kel", "F_12C", "f_delayed", "t_lag")])
+  seeds_12C <- c(informed_seed_12C, no_lag_seeds, dip_seeds, jitter_seeds_12C, extra_seeds_12C)
 
-  lower <- vapply(BOUNDS_LAGGED, `[`, numeric(1), 1)
-  upper <- vapply(BOUNDS_LAGGED, `[`, numeric(1), 2)
-  fit <- fit_multistart(objective, lower, upper, seeds = seeds, control = list(maxit = maxit))
-  if (is.null(fit)) return(empty)
+  lower12 <- vapply(BOUNDS_LAGGED_12C, `[`, numeric(1), 1)
+  upper12 <- vapply(BOUNDS_LAGGED_12C, `[`, numeric(1), 2)
+  fit12 <- fit_multistart(objective_12C, lower12, upper12, seeds = seeds_12C, control = list(maxit = maxit))
+  if (is.null(fit12)) return(empty)
+  par12 <- fit12$par
 
-  par <- fit$par
-  simA <- function(t, dose) bateman_conc(t, par[["ka"]], par[["kel"]], par[["F_12C"]], dose, Vd)
-  simB <- function(t, dose) simulate_delayed_release(t, par[["k_release"]], par[["ka"]], par[["kel"]], par[["F_13C6"]], dose, Vd)$conc
-  pred12 <- simulate_lagged_dose(simA, obs12$time_min, dose_12C, par[["f_delayed"]], par[["t_lag"]])
-  pred13 <- simulate_lagged_dose(simB, obs13$time_min, dose_13C6_mg, par[["f_delayed"]], par[["t_lag"]])
+  simA_fixed <- function(t, dose) bateman_conc(t, par12[["ka"]], par12[["kel"]], par12[["F_12C"]], dose, Vd)
+  pred12 <- simulate_lagged_dose(simA_fixed, obs12$time_min, dose_12C, par12[["f_delayed"]], par12[["t_lag"]])
+  r2_12C <- r_squared(obs12$conc_mgL, pred12)
 
-  r2_12C  <- r_squared(obs12$conc_mgL, pred12)
+  # ---- Stage 2: F_13C6, k_release from 13C6, with ka/kel/f_delayed/t_lag fixed at stage 1's estimate ----
+  objective_13C6 <- function(theta) {
+    simB <- function(t, dose) simulate_delayed_release(t, theta[["k_release"]], par12[["ka"]], par12[["kel"]], theta[["F_13C6"]], dose, Vd)$conc
+    pred13 <- tryCatch(simulate_lagged_dose(simB, obs13$time_min, dose_13C6_mg, par12[["f_delayed"]], par12[["t_lag"]]), error = function(e) NULL)
+    if (is.null(pred13) || any(!is.finite(pred13))) return(1e10)
+    ss_tot13 <- sum((obs13$conc_mgL - mean(obs13$conc_mgL))^2)
+    total <- sum((pred13 - obs13$conc_mgL)^2) / ss_tot13
+
+    fine13 <- simulate_lagged_dose(simB, FINE_T, dose_13C6_mg, par12[["f_delayed"]], par12[["t_lag"]])
+    if (any(!is.finite(fine13))) return(1e10)
+    tmax13 <- FINE_T[which.max(fine13)]
+    total <- total + TMAX_LAMBDA * max(0, MIN_TMAX - tmax13)^2
+    obs_cmax13 <- max(obs13$conc_mgL)
+    excess13 <- max(0, abs(max(fine13) - obs_cmax13) / obs_cmax13 - CMAX_TOL)
+    total + CMAX_LAMBDA * excess13^2
+  }
+
+  fixed_seeds_13C6 <- list(c(F_13C6 = 0.05, k_release = 0.05), c(F_13C6 = 0.1, k_release = 0.02),
+                            c(F_13C6 = 0.02, k_release = 0.3))
+  extra_seeds_13C6 <- lapply(extra_seeds, function(s) s[c("F_13C6", "k_release")])
+  jitter_seeds_13C6 <- random_seeds(N_RANDOM_13C6_GIVEN_LAG, BOUNDS_13C6_GIVEN_LAG, log_scale = c("k_release"))
+  seeds_13C6 <- c(fixed_seeds_13C6, jitter_seeds_13C6, extra_seeds_13C6)
+
+  lower13 <- vapply(BOUNDS_13C6_GIVEN_LAG, `[`, numeric(1), 1)
+  upper13 <- vapply(BOUNDS_13C6_GIVEN_LAG, `[`, numeric(1), 2)
+  fit13 <- fit_multistart(objective_13C6, lower13, upper13, seeds = seeds_13C6, control = list(maxit = maxit))
+  if (is.null(fit13)) return(empty)
+  par13 <- fit13$par
+
+  simB_fixed <- function(t, dose) simulate_delayed_release(t, par13[["k_release"]], par12[["ka"]], par12[["kel"]], par13[["F_13C6"]], dose, Vd)$conc
+  pred13 <- simulate_lagged_dose(simB_fixed, obs13$time_min, dose_13C6_mg, par12[["f_delayed"]], par12[["t_lag"]])
   r2_13C6 <- r_squared(obs13$conc_mgL, pred13)
 
   tibble(
-    ka = par[["ka"]], kel = par[["kel"]], F_12C = par[["F_12C"]], F_13C6 = par[["F_13C6"]],
-    k_release = par[["k_release"]], f_delayed = par[["f_delayed"]], t_lag = par[["t_lag"]],
+    ka = par12[["ka"]], kel = par12[["kel"]], F_12C = par12[["F_12C"]], F_13C6 = par13[["F_13C6"]],
+    k_release = par13[["k_release"]], f_delayed = par12[["f_delayed"]], t_lag = par12[["t_lag"]],
     r2_12C = r2_12C, r2_13C6 = r2_13C6,
-    kel_at_bound = par[["kel"]] > (BOUNDS_LAGGED$kel[2] - 1e-4),
-    k_release_at_bound = par[["k_release"]] > (BOUNDS_LAGGED$k_release[2] - 1e-4),
-    converged = fit$convergence == 0,
+    kel_at_bound = par12[["kel"]] > (BOUNDS_LAGGED_12C$kel[2] - 1e-4),
+    k_release_at_bound = par13[["k_release"]] > (BOUNDS_13C6_GIVEN_LAG$k_release[2] - 1e-4),
+    converged = fit12$convergence == 0 && fit13$convergence == 0,
     r2_12C_low = r2_12C < R2_RELIABLE_MIN,
     r2_13C6_low = r2_13C6 < R2_RELIABLE_MIN,
-    objective_value = fit$value
+    objective_value = fit12$value + fit13$value,   # not comparable across subjects, only against this subject's own prior/retry pair
+    rss_12C = sum((obs12$conc_mgL - pred12)^2),   # raw (unweighted, native mg/L^2) - for the single_wave-vs-two_wave AIC comparison below
+    n_12C = length(obs12$conc_mgL),
+    t30_present = TRUE   # the t30-missing check above already returned early otherwise
   )
 }
 
 # ---------------------------------------------------------------------------
-# Run both models for every subject x visit
+# Run both candidate models for every subject x visit
 # ---------------------------------------------------------------------------
+R2_SINGLE_WAVE_SKIP_TWO_WAVE <- 0.95   # see the comment on skip_two_wave below
+
 fit_one <- function(i) {
   sid <- subject_visits$subject_id[i]; vis <- subject_visits$visit[i]
   set.seed(string_seed(paste(sid, vis)))   # reproducible regardless of N_CORES or row order - see pk_fit.R
-  cat(sid, vis, "(baseline)\n")
-  base <- fit_subject_visit_baseline(sid, vis)
-  set.seed(string_seed(paste(sid, vis, "lagged")))
-  cat(sid, vis, "(lagged)\n")
-  lag <- fit_subject_visit_lagged(sid, vis)
-  list(baseline = base, lagged = lag)
+  cat(sid, vis, "(single_wave)\n")
+  sw <- fit_subject_visit_single_wave(sid, vis)
+
+  # If single_wave already fits 12C very well, don't try two_wave at all -
+  # not a computational shortcut (AIC on ER06 FCT2 showed a >0.95 R2 single
+  # fit CAN still be decisively beaten by two_wave, a real ~10x RSS
+  # reduction, not noise), but a deliberate choice to not trust a purely
+  # statistical fit-improvement criterion over biological plausibility once
+  # the data is already well explained. AIC has no concept of whether a
+  # shape is physiologically real; with only 8-9 sparse points, 2 extra
+  # degrees of freedom can find a "better" fit that's just exploiting
+  # flexibility rather than a genuine second absorption wave, and that
+  # risk is judged not worth taking once the simple model already works.
+  skip_two_wave <- !is.na(sw$r2_12C) && sw$r2_12C > R2_SINGLE_WAVE_SKIP_TWO_WAVE
+  if (skip_two_wave) {
+    cat(sid, vis, "(two_wave skipped - single_wave R2 =", round(sw$r2_12C, 3), "already >",
+        R2_SINGLE_WAVE_SKIP_TWO_WAVE, ")\n")
+    tw <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA,
+                 f_delayed = NA, t_lag = NA,
+                 r2_12C = NA, r2_13C6 = NA, kel_at_bound = NA, k_release_at_bound = NA,
+                 converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA,
+                 rss_12C = NA, n_12C = NA, t30_present = sw$t30_present)
+  } else {
+    set.seed(string_seed(paste(sid, vis, "two_wave")))
+    cat(sid, vis, "(two_wave)\n")
+    tw <- fit_subject_visit_two_wave(sid, vis)
+  }
+  list(single_wave = sw, two_wave = tw)
 }
 
 fit_list <- parallel::mclapply(seq_len(nrow(subject_visits)), fit_one, mc.cores = N_CORES)
-baseline_results <- bind_cols(subject_visits, bind_rows(lapply(fit_list, `[[`, "baseline")))
-lagged_results   <- bind_cols(subject_visits, bind_rows(lapply(fit_list, `[[`, "lagged")))
+single_wave_results <- bind_cols(subject_visits, bind_rows(lapply(fit_list, `[[`, "single_wave")))
+two_wave_results    <- bind_cols(subject_visits, bind_rows(lapply(fit_list, `[[`, "two_wave")))
 
 # Adaptive retry for flagged fits (boundary/poor-fit/non-convergence) - see
 # "Adaptive retry" in docs/pk-model.md for why. Run separately per model.
-refit_flagged_baseline <- function(i, seeds, maxit) {
-  sid <- baseline_results$subject_id[i]; vis <- baseline_results$visit[i]
+refit_flagged_single_wave <- function(i, seeds, maxit) {
+  sid <- single_wave_results$subject_id[i]; vis <- single_wave_results$visit[i]
   set.seed(string_seed(paste(sid, vis, "retry")))
-  cat(sid, vis, "(baseline retry)\n")
-  fit_subject_visit_baseline(sid, vis, extra_seeds = seeds, maxit = maxit)
+  cat(sid, vis, "(single_wave retry)\n")
+  fit_subject_visit_single_wave(sid, vis, extra_seeds = seeds, maxit = maxit)
 }
-baseline_results <- adaptive_retry(
-  baseline_results,
+single_wave_results <- adaptive_retry(
+  single_wave_results,
   bound_cols = c(kel_at_bound = "kel", k_release_at_bound = "k_release"),
   extra_flag_cols = c("r2_12C_low", "r2_13C6_low"),
   convergence_col = "converged",
   bounds = BOUNDS_JOINT,
   par_cols = c("ka", "kel", "F_12C", "F_13C6", "k_release"),
-  refit_fn = refit_flagged_baseline,
+  refit_fn = refit_flagged_single_wave,
   log_scale = c("ka", "kel", "k_release"),
   mc.cores = N_CORES
 )
 
-refit_flagged_lagged <- function(i, seeds, maxit) {
-  sid <- lagged_results$subject_id[i]; vis <- lagged_results$visit[i]
-  set.seed(string_seed(paste(sid, vis, "lagged retry")))
-  cat(sid, vis, "(lagged retry)\n")
-  fit_subject_visit_lagged(sid, vis, extra_seeds = seeds, maxit = maxit)
+refit_flagged_two_wave <- function(i, seeds, maxit) {
+  sid <- two_wave_results$subject_id[i]; vis <- two_wave_results$visit[i]
+  set.seed(string_seed(paste(sid, vis, "two_wave retry")))
+  cat(sid, vis, "(two_wave retry)\n")
+  fit_subject_visit_two_wave(sid, vis, extra_seeds = seeds, maxit = maxit)
 }
-lagged_results <- adaptive_retry(
-  lagged_results,
+two_wave_results <- adaptive_retry(
+  two_wave_results,
   bound_cols = c(kel_at_bound = "kel", k_release_at_bound = "k_release"),
   extra_flag_cols = c("r2_12C_low", "r2_13C6_low"),
   convergence_col = "converged",
   bounds = BOUNDS_LAGGED,
   par_cols = c("ka", "kel", "F_12C", "F_13C6", "k_release", "f_delayed", "t_lag"),
-  refit_fn = refit_flagged_lagged,
+  refit_fn = refit_flagged_two_wave,
   log_scale = c("ka", "kel", "k_release"),
   maxit_retry = 100,
   mc.cores = N_CORES
 )
 
-baseline_results$capsule_dissolution_halflife_min <- log(2) / baseline_results$k_release
-lagged_results$capsule_dissolution_halflife_min <- log(2) / lagged_results$k_release
+single_wave_results$capsule_dissolution_halflife_min <- log(2) / single_wave_results$k_release
+two_wave_results$capsule_dissolution_halflife_min <- log(2) / two_wave_results$k_release
+
+# ---------------------------------------------------------------------------
+# Model selection: single_wave vs two_wave, per subject x visit, by AIC on
+# 12C's own raw residuals only. The two-stage design means 13C6 never gains
+# extra free parameters between the two candidates - it's always fit with
+# exactly F_13C6/k_release, just conditioned on different inherited
+# ka/kel/timing from 12C. All the actual complexity difference (f_delayed,
+# t_lag: 2 extra parameters) lives in 12C's own stage-1 fit, so that's where
+# "does the added complexity earn its keep" should be judged - comparing
+# AIC on a single curve's own residuals avoids the cross-curve concentration-
+# scale mixing problem a combined-curve AIC would have. 13C6 (and everything
+# else) simply follows whichever structure wins for 12C.
+# ---------------------------------------------------------------------------
+K_12C_SINGLE_WAVE <- 3   # ka, kel, F_12C
+K_12C_TWO_WAVE    <- 5   # + f_delayed, t_lag
+
+aic <- function(rss, n, k) n * log(rss / n) + 2 * k
+
+sw <- single_wave_results %>% select(subject_id, visit, rss_12C, n_12C) %>%
+  rename(rss_sw = rss_12C, n_sw = n_12C)
+tw <- two_wave_results %>% select(subject_id, visit, rss_12C, n_12C) %>%
+  rename(rss_tw = rss_12C, n_tw = n_12C)
+selection <- sw %>% left_join(tw, by = c("subject_id", "visit")) %>%
+  mutate(
+    aic_single_wave = aic(rss_sw, n_sw, K_12C_SINGLE_WAVE),
+    aic_two_wave    = aic(rss_tw, n_tw, K_12C_TWO_WAVE),
+    model = case_when(
+      is.na(aic_single_wave) & is.na(aic_two_wave) ~ NA_character_,
+      is.na(aic_two_wave)                          ~ "single_wave",
+      is.na(aic_single_wave)                       ~ "two_wave",
+      aic_two_wave < aic_single_wave                ~ "two_wave",
+      TRUE                                          ~ "single_wave"
+    )
+  ) %>%
+  select(subject_id, visit, model, aic_single_wave, aic_two_wave)
+
+results <- selection %>%
+  left_join(single_wave_results, by = c("subject_id", "visit"), suffix = c("", ".sw")) %>%
+  left_join(two_wave_results, by = c("subject_id", "visit"), suffix = c("", ".tw"))
+
+# Pick each output column from whichever model was selected for that row.
+pick <- function(col) {
+  sw_col <- results[[col]]; tw_col <- results[[paste0(col, ".tw")]]
+  if_else(results$model == "two_wave", tw_col, sw_col)
+}
+for (col in c("ka", "kel", "F_12C", "F_13C6", "k_release", "r2_12C", "r2_13C6",
+              "kel_at_bound", "k_release_at_bound", "converged", "r2_12C_low", "r2_13C6_low",
+              "capsule_dissolution_halflife_min")) {
+  results[[col]] <- pick(col)
+}
+# f_delayed/t_lag only exist in two_wave_results (single_wave has no such
+# columns), so the join above brings them in unsuffixed, not as ".tw" -
+# still need to null them out when two_wave was attempted but lost the AIC
+# comparison (their values would otherwise leak through from that losing fit).
+results$f_delayed <- if_else(results$model == "two_wave", results$f_delayed, NA_real_)
+results$t_lag      <- if_else(results$model == "two_wave", results$t_lag, NA_real_)
+# t30_present (kept from single_wave's own copy via the join above, since
+# that model is always attempted regardless of whether two_wave was skipped)
+# is a property of the data, not of which model won - ka is poorly anchored
+# without it even under single_wave; downstream reliability filtering should
+# take this into account alongside r2/converged/bound flags.
+results <- results %>% select(subject_id, visit, model, ka, kel, F_12C, F_13C6, k_release,
+                               f_delayed, t_lag, capsule_dissolution_halflife_min, t30_present,
+                               r2_12C, r2_13C6, kel_at_bound, k_release_at_bound, converged,
+                               r2_12C_low, r2_13C6_low, aic_single_wave, aic_two_wave)
+
+cat("\n=== Model selection ===\n")
+print(table(results$model, useNA = "ifany"))
 
 dir.create("results", showWarnings = FALSE)
-write_csv(baseline_results, "results/fit_results_baseline.csv")
-write_csv(lagged_results, "results/fit_results_lagged.csv")
+write_csv(single_wave_results, "results/fit_results_single_wave.csv")
+write_csv(two_wave_results, "results/fit_results_two_wave.csv")
+write_csv(results, "results/fit_results.csv")
 
-# Plots: one figure per subject, both isotopes x both visits, both models
-# overlaid against the observed points (which include t=0, unlike the
-# t>0-only data_fit used for fitting).
-simulate_fit <- function(sid, vis, r, model) {
+# Plots: one figure per subject, both isotopes x both visits, using each
+# subject x visit's SELECTED model (single_wave or two_wave, per
+# results$model above), colored by that subject's diet arm, against the
+# observed points (which include t=0, unlike the t>0-only data_fit used for
+# fitting).
+simulate_fit <- function(sid, vis, r) {
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
   Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
   dose_12C <- cov$dose_12C_mg
   fine <- seq(0, 400, length.out = 400)
 
-  if (model == "baseline") {
-    sim12 <- bateman_conc(fine, r$ka, r$kel, r$F_12C, dose_12C, Vd)
-    sim13 <- simulate_delayed_release(fine, r$k_release, r$ka, r$kel, r$F_13C6, dose_13C6_mg, Vd)$conc
-  } else {
+  if (r$model == "two_wave") {
     simA <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_12C, dose, Vd)
     simB <- function(t, dose) simulate_delayed_release(t, r$k_release, r$ka, r$kel, r$F_13C6, dose, Vd)$conc
     sim12 <- simulate_lagged_dose(simA, fine, dose_12C, r$f_delayed, r$t_lag)
     sim13 <- simulate_lagged_dose(simB, fine, dose_13C6_mg, r$f_delayed, r$t_lag)
+  } else {
+    sim12 <- bateman_conc(fine, r$ka, r$kel, r$F_12C, dose_12C, Vd)
+    sim13 <- simulate_delayed_release(fine, r$k_release, r$ka, r$kel, r$F_13C6, dose_13C6_mg, Vd)$conc
   }
 
   t_end <- max(time_to_clearance(fine, sim12, CLEARANCE_FRAC),
@@ -455,28 +621,22 @@ simulate_fit <- function(sid, vis, r, model) {
 
 plot_subject_fit <- function(sid) {
   obs <- data_corrected %>% filter(subject_id == sid) %>% select(visit, isotope, time_min, conc_mgL)
-  fits_base <- baseline_results %>% filter(subject_id == sid, !is.na(ka))
-  fits_lag  <- lagged_results   %>% filter(subject_id == sid, !is.na(ka))
-  if (nrow(fits_base) == 0 && nrow(fits_lag) == 0) return(NULL)
+  fits <- results %>% filter(subject_id == sid, !is.na(ka))
+  if (nrow(fits) == 0) return(NULL)
 
-  sim <- bind_rows(
-    fits_base %>% pmap_dfr(function(...) {
-      row <- tibble(...)
-      bind_cols(visit = row$visit, model = "baseline", simulate_fit(sid, row$visit, row, "baseline"))
-    }),
-    fits_lag %>% pmap_dfr(function(...) {
-      row <- tibble(...)
-      bind_cols(visit = row$visit, model = "lagged", simulate_fit(sid, row$visit, row, "lagged"))
-    })
-  )
+  diet_val <- covariates %>% filter(subject_id == sid) %>% pull(diet) %>% first()
+
+  sim <- fits %>% pmap_dfr(function(...) {
+    row <- tibble(...)
+    bind_cols(visit = row$visit, diet = diet_val, simulate_fit(sid, row$visit, row))
+  })
 
   ggplot(obs, aes(time_min, conc_mgL)) +
     geom_point(color = "black", size = 1.4) +
-    geom_line(data = sim, aes(color = model, linetype = model), linewidth = 0.8) +
+    geom_line(data = sim, aes(color = diet), linewidth = 0.8) +
     facet_grid(rows = vars(isotope), cols = vars(visit), scales = "free",
                labeller = labeller(visit = VISIT_LABELS, isotope = ISOTOPE_LABELS)) +
-    scale_color_manual(values = MODEL_COLORS, labels = MODEL_LABELS, name = NULL) +
-    scale_linetype_manual(values = c(baseline = "dashed", lagged = "solid"), labels = MODEL_LABELS, name = NULL) +
+    scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
     labs(title = sid, x = "Time (min)", y = "Concentration (mg/L)") +
     theme_Publication()
 }
@@ -488,5 +648,6 @@ for (sid in unique(subject_visits$subject_id)) {
                            p, width = 8, height = 5, dpi = 120)
 }
 
-cat("\nDone. results/fit_results_baseline.csv, results/fit_results_lagged.csv,",
+cat("\nDone. results/fit_results.csv (selected model per subject x visit),",
+    "results/fit_results_single_wave.csv, results/fit_results_two_wave.csv (both candidates),",
     "results/plots_individual/*.pdf\n")
