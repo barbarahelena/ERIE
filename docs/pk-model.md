@@ -87,12 +87,16 @@ is real, not just an extra free parameter absorbing noise.
 
 ## The post-peak dip and the lagged-dose model
 
-A meaningful minority of curves (~19% by a simple threshold-free check: any
-post-peak local trough followed by a rise of >=15% of that curve's own peak)
-show a dip after an initial peak, then a second, often higher, rise before
-the final decline - most clearly on `ER01` and `ER09` (every one of their
-four curves), and at lower relative amplitude (a flattening rather than a
-full second rise) on several more, including `ER03`. A smaller-amplitude
+A meaningful minority of curves (13/68 = 19.1%, by `has_peak_dip_rise()` in
+`pk_diagnostics.R` - a threshold-free check for a post-peak local trough
+followed by a rise of >=15% of that curve's own peak, requiring the
+candidate first peak itself to be a substantial fraction of the overall
+peak; see "Choosing between single_wave and two_wave" below, where this
+same function gates whether `two_wave` is even attempted) show a dip after
+an initial peak, then a second, often higher, rise before the final decline
+- most clearly on `ER01` and `ER09` (every one of their four curves), and
+at lower relative amplitude (a flattening rather than a full second rise)
+on several more, including `ER03`. A smaller-amplitude
 version of the same signature - a step in the decline much flatter than its
 neighbors - shows up on ~31% of curves. Both patterns cluster tightly in
 time (85% of the larger dips fall at exactly t=60 or t=90), which is too
@@ -116,26 +120,128 @@ genuine local minimum followed by a second rise.
 
 **What does work: a genuinely time-*lagged* second dose**
 (`simulate_lagged_dose()` in `scripts/assets/pk_curves.R`), not a second
-pool active from t=0 at a different rate. A shared fraction `f_delayed` of
-each dose (12C and 13C6 both - they're ingested by the same subject at the
-same time, so a plausible shared upstream trigger, e.g. transient
-duodenal-brake feedback inhibition from the large osmotic/caloric load,
-should affect both) contributes nothing until a shared `t_lag`, then behaves
-exactly like a fresh dose given at that later time - mathematically
-equivalent to two separately-timed doses. This breaks the shared-tail
-constraint above because the delayed portion has a genuine gap, not just a
-different decay rate, and was confirmed both analytically (a lag creates an
-actual discontinuity in the delivery rate) and numerically (produces a real
-local minimum followed by a second, higher peak) before being wired into
-the fitting pipeline. Piloted on `ER01`/`ER03`/`ER09` (`results/model-post-peak-dip-pilot/`)
-with a clear, visually-confirmed win on the genuine dip cases (`ER01`,
-`ER09`) - both curves transformed from a single smooth hump to a real
-double-humped fit tracking the dip - and degrades gracefully (small
-`f_delayed`) on subjects that don't need it. `02_fit_erie_model.R` now fits
-this model *alongside* the baseline for every subject x visit
-(`fit_subject_visit_lagged()`), rather than replacing the baseline outright,
-so both are available for comparison in `results/fit_results_baseline.csv`
-and `results/fit_results_lagged.csv`.
+pool active from t=0 at a different rate. A fraction `f_delayed` of a dose
+contributes nothing until `t_lag`, then behaves exactly like a fresh dose
+given at that later time - mathematically equivalent to two separately-timed
+doses. This breaks the shared-tail constraint above because the delayed
+portion has a genuine gap, not just a different decay rate, and was
+confirmed both analytically (a lag creates an actual discontinuity in the
+delivery rate) and numerically (produces a real local minimum followed by a
+second, higher peak) before being wired into the fitting pipeline. Piloted
+on `ER01`/`ER03`/`ER09` (`results/model-post-peak-dip-pilot/`) with a clear,
+visually-confirmed win on the genuine dip cases (`ER01`, `ER09`) - both
+curves transformed from a single smooth hump to a real double-humped fit
+tracking the dip - and degrades gracefully (`f_delayed` near 0) on subjects
+that don't need it.
+
+`02_fit_erie_model.R` fits two candidate models per subject x visit,
+`fit_subject_visit_single_wave()` (the plain joint delayed-release model,
+formerly called "baseline") and `fit_subject_visit_two_wave()` (this
+lagged-dose extension, formerly "lagged"), and picks one - see "Choosing
+between single_wave and two_wave" below - rather than reporting both side
+by side. Both candidates' own fits are still written out in full
+(`results/fit_results_single_wave.csv`, `results/fit_results_two_wave.csv`)
+alongside the selected combination (`results/fit_results.csv`).
+
+`t_lag`'s upper bound is 150 min - past 180, sampling widens to 60-
+(180->240) and 120-min (240->360) gaps, and a `t_lag` landing in one lets
+the optimizer place an entire invented second wave where no sample can
+confirm or refute it: found on `ER12` FCT2, `t_lag`=179min, `r2_13C6`
+dropped from single_wave's 0.95 to 0.75, a large invented peak with zero
+supporting data around t=200-220.
+
+`t_lag`'s **lower** bound is not a fixed constant - it depends on that
+subject's own observed 12C concentration at t=30 (`EARLY_LAG_OK_MGL = 5`,
+`EARLY_LAG_BAD_MGL = 75` in `02_fit_erie_model.R`, linearly interpolated: 5
+min when t=30 is at or below 5 mg/L, rising to a 30 min floor once t=30 is
+at or above 75 mg/L). A flat low bound (5 min for everyone) let the
+optimizer fake an early *onset* delay (small `t_lag`, `f_delayed` near 1 -
+"almost the whole dose is late") in the same always-unsampled 0-30min gap,
+regardless of whether the subject's own data gave any reason to believe
+something was delayed that early: found on `ER06` FCT2, which converged to
+`t_lag`=19.7min, `f_delayed`=0.999 even though its own t=30 sample was
+already near its peak (~80 mg/L, well above `EARLY_LAG_BAD_MGL`). But a
+flat *high* bound (30 min for everyone) would equally wrongly forbid a
+genuine early delay for a subject whose t=30 really is near 0 - a real,
+separately-observed phenomenon - so the bound is computed per subject
+instead of set once for the whole cohort. Refit with this bound, `ER06`
+FCT2 converged to a qualitatively different, more moderate solution
+(`t_lag`=35.3min, `f_delayed`=0.320, not just clamped to the new floor with
+the same extreme `f_delayed`), while the genuine-dip subjects (`ER01`,
+`ER09`, whose own t=30 values are also well above `EARLY_LAG_OK_MGL`) were
+unaffected - their real `t_lag` (85-114min) was never near the floor to
+begin with.
+
+### Choosing between single_wave and two_wave
+
+Selection is by AIC, `n*ln(RSS/n) + 2k`, computed on **12C's own raw
+residuals only** (`K_12C_SINGLE_WAVE = 3`: `ka`, `kel`, `F_12C`; vs.
+`K_12C_TWO_WAVE = 5`: + `f_delayed`, `t_lag`) - not a combined-curve AIC.
+13C6 is fit separately once 12C's structure is already decided (see below),
+so basing selection on 12C alone keeps the question "does 12C's own curve
+earn a second wave" from being answered by 13C6's fit quality instead, and
+avoids the cross-curve concentration-scale mixing problem a combined AIC
+would have.
+
+Three rules override a pure AIC comparison:
+- **`two_wave` is never attempted when 12C's t=30 sample is missing.**
+  Without it, the 0-60min window has only its t=0/t=60 endpoints to anchor a
+  5-parameter fit - under-identified, and AIC would otherwise rubber-stamp
+  whatever shape 5 sparse points can fit almost exactly. Found via `ER05`
+  FCT1 (t=30, 90, 150, 240 all missing - only 5 real points for 12C).
+- **`two_wave` is never attempted unless 12C's own raw observations show an
+  actual peak-dip-rise pattern** (`has_peak_dip_rise()` in
+  `pk_diagnostics.R`: a post-peak local trough followed by a subsequent
+  rise of >=15% of that curve's own peak, requiring the candidate first
+  peak itself to be at least 50% of the overall peak so an early,
+  low-concentration noise wobble isn't mistaken for one - the same
+  threshold-free check used to characterize dip prevalence across the
+  cohort, at the top of this section). This is the strongest of the three
+  gates: fitting `two_wave` first and relying on AIC/R² to notice
+  afterward that there was nothing to explain lets a flexible model
+  produce a statistically-plausible-*looking* fit (good R², even
+  reasonably moderate parameters after the `t_lag` bound fix above) for a
+  curve that never had a second wave at all. Concretely, checking the raw
+  data directly (rather than only the fitted result) revealed that `ER03`
+  FCT1 and `ER06` FCT1/FCT2 - all previously accepted `two_wave` fits with
+  good R² - have **no actual dip-then-rise in their own raw 12C data**:
+  `ER03` FCT1 shows a flattening in its decline, not a rise; `ER06` FCT1
+  has only a ~8%-of-peak wobble, below the 15% threshold; `ER06` FCT2 is
+  simply a single peak at t=60 with a monotonic decline after. The two
+  clearest genuine-dip subjects, `ER01` and `ER09`, pass this check
+  unchanged (a real dip followed by a taller second peak) on all four of
+  their curves.
+- **`two_wave` is never attempted when `single_wave` already fits 12C with
+  R² > 0.95** (`R2_SINGLE_WAVE_SKIP_TWO_WAVE`). AIC has no concept of
+  whether a shape is physiologically real, and with only 8-9 sparse points,
+  2 extra degrees of freedom can find a "better" fit that's just exploiting
+  flexibility rather than capturing a genuine second wave (confirmed on
+  `ER06` FCT2 in an earlier run: a single_wave R² of 0.980 was still beaten
+  by `two_wave`'s AIC, a real ~10x RSS reduction, not noise - yet the
+  resulting shape read as invented, not biologically plausible). Once the
+  simple model already explains the data well, that risk isn't judged
+  worth taking. This gate and the peak-dip-rise gate above catch
+  overlapping but not identical cases - a curve can fail the R² gate
+  (single_wave already explains it well) while still showing SOME raw dip,
+  or pass the R² gate (single_wave R² <= 0.95) while showing no raw dip at
+  all - so both are kept.
+
+### 13C6's own wave choice
+
+13C6 does not inherit 12C's `f_delayed`. It gets its own free parameter,
+`f_delayed_13C6`, fit in a second stage once 12C's `ka`/`kel`/`t_lag` are
+already fixed from stage 1 - so 13C6 independently decides whether it rode
+only the first wave (`f_delayed_13C6` near 0), only the second
+(near 1), or split across both, sharing only `t_lag` (the timing of gastric
+emptying's second wave, a systemic event) with 12C. An earlier version
+forced 13C6 to inherit 12C's `f_delayed` directly, which failed concretely
+on `ER03` FCT1: 12C genuinely has two waves (R² = 0.99), but 13C6's own
+points show one early peak decaying monotonically with nothing at the time
+the inherited second wave would place one - forcing 12C's fraction onto it
+gave `r2_13C6` = 0.075. The capsule's contents don't have to split across
+both waves in the same proportion as the much larger liquid 12C dose; it's
+biologically plausible the capsule emptied entirely in one wave or the
+other.
 
 **Known limitation, not yet addressed (TODO):**
 - **`MIN_TMAX` only checks the combined curve's single global maximum, not
@@ -343,8 +449,17 @@ stuck in the same kind of worse local optimum that happens to land
 comfortably *inside* the bounds would show no boundary flag at all, and
 look unremarkable - but is exactly what a poor R² or a non-converged fit
 would actually look like. So a subject×visit is retried if `kel_at_bound`,
-`k_release_at_bound`, `r2_12C_low`, `r2_13C6_low`, or `converged = FALSE` -
-any of them, not boundary flags only. The retry only replaces the original
+`k_release_at_bound`, `r2_12C_low`, or `converged = FALSE` - any of them,
+not boundary flags only. `r2_13C6_low` alone is **not** a retry trigger
+(for either `single_wave` or `two_wave`), unlike the other flags: a poor
+13C6 fit is often a structural mismatch - the shared `ka`/`kel`/wave-timing
+13C6 inherits from 12C just isn't right for its own curve, and now that
+13C6 has its own independent `f_delayed_13C6` in `two_wave` (see "13C6's
+own wave choice" above) specifically to address that, a persistently poor
+`r2_13C6` after that freedom means the freedom itself didn't find a good
+shape - not that the search under-explored. A denser retry of the same
+structure is unlikely to fix that, so retrying is reserved for cases where
+it can actually help. The retry only replaces the original
 result if its objective value (`objective_value` in the results table - not
 comparable across subjects, only against that same subject's own
 prior/retry pair) is strictly better, so broadening the trigger this way
