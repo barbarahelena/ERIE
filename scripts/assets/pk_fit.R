@@ -98,20 +98,42 @@ string_seed <- function(key) {
 #' @param tmax_lambda Penalty weight applied to Tmax shortfalls.
 #' @param weight_floor_frac Floor on the within-curve weighting, as a
 #'   fraction of that curve's own observed Cmax.
+#' @param proportional_weighting If TRUE (default), apply the within-curve
+#'   `1/pred^2` weighting described above. If FALSE, use plain per-curve SSE
+#'   normalized only by that curve's own total variance (matching
+#'   `former_models/MixedModel`'s objective exactly) - every observed point
+#'   counts equally, including the peak/early region the weighted version
+#'   deliberately discounts. Set to FALSE when fitting a curve whose most
+#'   informative feature IS the peak/early shape (e.g. a sharp early spike a
+#'   sparse tail can't otherwise pin down) - confirmed by direct comparison
+#'   on ER03 FCT1's 13C6 curve, a known-catastrophic fit (R2 = -2.18)
+#'   under the weighted objective: switching to unweighted alone (same
+#'   MIN_TMAX, same bounds, ordinary unseeded multistart) recovered R2 =
+#'   0.37, and former_models/MixedModel's own historical fit for the exact
+#'   same subject - built with an unweighted objective all along - reached
+#'   R2 = 0.71. The weighted default remains appropriate for curves without
+#'   a sharp early feature, where it was added specifically to fix a
+#'   measured ~24x peak-vs-tail heteroscedasticity (see docs/pk-model.md).
 #' @return A function(theta) -> scalar objective value to minimize.
 build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20,
-                                   tmax_lambda = 50, weight_floor_frac = 0.01) {
+                                   tmax_lambda = 50, weight_floor_frac = 0.01,
+                                   proportional_weighting = TRUE) {
   function(theta) {
     total <- 0
     for (cv in curves) {
       pred <- tryCatch(cv$simulate(theta), error = function(e) NA_real_)
       if (length(pred) != length(cv$conc) || any(!is.finite(pred))) return(1e10)
 
-      floor_val <- weight_floor_frac * max(cv$conc)
-      w <- 1 / pmax(pred, floor_val)^2
-      w_mean_obs <- sum(w * cv$conc) / sum(w)
-      weighted_ss_tot <- sum(w * (cv$conc - w_mean_obs)^2)
-      total <- total + sum(w * (pred - cv$conc)^2) / weighted_ss_tot
+      if (proportional_weighting) {
+        floor_val <- weight_floor_frac * max(cv$conc)
+        w <- 1 / pmax(pred, floor_val)^2
+        w_mean_obs <- sum(w * cv$conc) / sum(w)
+        weighted_ss_tot <- sum(w * (cv$conc - w_mean_obs)^2)
+        total <- total + sum(w * (pred - cv$conc)^2) / weighted_ss_tot
+      } else {
+        ss_tot <- sum((cv$conc - mean(cv$conc))^2)
+        total <- total + sum((pred - cv$conc)^2) / ss_tot
+      }
 
       if (!is.null(cv$fine_simulate) && (!is.null(min_tmax) || !is.null(cmax_tol))) {
         fine <- tryCatch(cv$fine_simulate(theta), error = function(e) NULL)
