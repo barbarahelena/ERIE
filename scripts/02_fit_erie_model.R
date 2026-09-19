@@ -653,12 +653,29 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
 # Run both candidate models for every subject x visit
 # ---------------------------------------------------------------------------
 R2_SINGLE_WAVE_SKIP_TWO_WAVE <- 0.95   # see the comment on skip_two_wave below
+# Deviation magnitude (peak_dip_rise_info()'s $excess) above which the raw
+# data is treated as UNAMBIGUOUS evidence of a genuine second wave, strong
+# enough to override both the R2>0.95 skip and, later, the AIC comparison
+# itself (see the model-selection block below). Set well above the 15%
+# detection floor and above ER01's own 0.40 (a clearly genuine, but
+# unremarkable-by-comparison, case) - chosen from the actual cohort
+# distribution: only ER08 FCT1 (1.57) and ER11 FCT1 (1.01) clear this bar,
+# both independently confirmed genuine (ER08: corroborated by 13C6 peaking
+# at the identical timepoint; ER11: a clean, sustained dip-then-peak, not
+# just a single-point spike). Deliberately conservative - most real dip
+# cases (including ER01, ER09) still go through the standard AIC
+# comparison, which already handles them correctly.
+EXCESS_DEFINITE_TWO_WAVE <- 0.90
 
 fit_one <- function(i) {
   sid <- subject_visits$subject_id[i]; vis <- subject_visits$visit[i]
   set.seed(string_seed(paste(sid, vis)))   # reproducible regardless of N_CORES or row order - see pk_fit.R
   cat(sid, vis, "(single_wave)\n")
   sw <- fit_subject_visit_single_wave(sid, vis)
+
+  obs12_raw <- data_fit %>% filter(subject_id == sid, visit == vis, isotope == "12C")
+  dip_evidence <- if (nrow(obs12_raw) >= 4) peak_dip_rise_info(obs12_raw$time_min, obs12_raw$conc_mgL) else list(detected = FALSE, excess = NA_real_)
+  definite_two_wave <- isTRUE(dip_evidence$detected) && !is.na(dip_evidence$excess) && dip_evidence$excess >= EXCESS_DEFINITE_TWO_WAVE
 
   # If single_wave already fits 12C very well, don't try two_wave at all -
   # not a computational shortcut (AIC on ER06 FCT2 showed a >0.95 R2 single
@@ -670,7 +687,12 @@ fit_one <- function(i) {
   # degrees of freedom can find a "better" fit that's just exploiting
   # flexibility rather than a genuine second absorption wave, and that
   # risk is judged not worth taking once the simple model already works.
-  skip_two_wave <- !is.na(sw$r2_12C) && sw$r2_12C > R2_SINGLE_WAVE_SKIP_TWO_WAVE
+  # Overridden when the raw-data evidence is unambiguous (definite_two_wave)
+  # - if the data itself makes a second wave obvious, single_wave's R2
+  # alone shouldn't veto even trying it (and forcing single_wave to
+  # "explain" an unambiguous two-wave curve risks distorting its own ka/kel,
+  # not just missing the second wave - see the ka=kel local-optimum TODO).
+  skip_two_wave <- !is.na(sw$r2_12C) && sw$r2_12C > R2_SINGLE_WAVE_SKIP_TWO_WAVE && !definite_two_wave
   if (skip_two_wave) {
     cat(sid, vis, "(two_wave skipped - single_wave R2 =", round(sw$r2_12C, 3), "already >",
         R2_SINGLE_WAVE_SKIP_TWO_WAVE, ")\n")
@@ -681,15 +703,16 @@ fit_one <- function(i) {
                  rss_12C = NA, n_12C = NA, t30_present = sw$t30_present)
   } else {
     set.seed(string_seed(paste(sid, vis, "two_wave")))
-    cat(sid, vis, "(two_wave)\n")
+    cat(sid, vis, if (definite_two_wave) "(two_wave - definite evidence)" else "(two_wave)", "\n")
     tw <- fit_subject_visit_two_wave(sid, vis)
   }
-  list(single_wave = sw, two_wave = tw)
+  list(single_wave = sw, two_wave = tw, definite_two_wave = definite_two_wave)
 }
 
 fit_list <- parallel::mclapply(seq_len(nrow(subject_visits)), fit_one, mc.cores = N_CORES)
 single_wave_results <- bind_cols(subject_visits, bind_rows(lapply(fit_list, `[[`, "single_wave")))
 two_wave_results    <- bind_cols(subject_visits, bind_rows(lapply(fit_list, `[[`, "two_wave")))
+definite_two_wave_flags <- bind_cols(subject_visits, tibble(definite_two_wave = vapply(fit_list, `[[`, logical(1), "definite_two_wave")))
 
 # Adaptive retry for flagged fits (boundary/poor-fit/non-convergence) - see
 # "Adaptive retry" in docs/pk-model.md for why. Run separately per model.
@@ -772,12 +795,21 @@ sw <- single_wave_results %>% select(subject_id, visit, rss_12C, n_12C) %>%
 tw <- two_wave_results %>% select(subject_id, visit, rss_12C, n_12C) %>%
   rename(rss_tw = rss_12C, n_tw = n_12C)
 selection <- sw %>% left_join(tw, by = c("subject_id", "visit")) %>%
+  left_join(definite_two_wave_flags, by = c("subject_id", "visit")) %>%
   mutate(
     aic_single_wave = aic(rss_sw, n_sw, K_12C_SINGLE_WAVE),
     aic_two_wave    = aic(rss_tw, n_tw, K_12C_TWO_WAVE),
     model = case_when(
       is.na(aic_single_wave) & is.na(aic_two_wave) ~ NA_character_,
       is.na(aic_two_wave)                          ~ "single_wave",
+      # definite_two_wave (see EXCESS_DEFINITE_TWO_WAVE above) overrides
+      # the AIC comparison itself, not just the R2>0.95 skip: if the raw
+      # data makes a second wave unambiguous, a marginal AIC edge for
+      # single_wave (e.g. from 13C6's noise leaking in via retry
+      # selection, or an unlucky local optimum) shouldn't be allowed to
+      # override direct visual evidence - only a failed two_wave fit
+      # (aic_two_wave NA, caught above) does.
+      definite_two_wave %in% TRUE                  ~ "two_wave",
       is.na(aic_single_wave)                       ~ "two_wave",
       aic_two_wave < aic_single_wave                ~ "two_wave",
       TRUE                                          ~ "single_wave"

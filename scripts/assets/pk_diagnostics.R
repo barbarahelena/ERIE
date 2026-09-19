@@ -79,10 +79,12 @@ time_to_clearance <- function(fine_time, fine_conc, frac = 0.01) {
 #'   that's the strongest single piece of evidence and the most useful
 #'   point to anchor a second-wave model's search on. The trigger time is
 #'   useful for seeding that model's search near the real evidence rather
-#'   than leaving it to find an unrelated local optimum (see
-#'   fit_subject_visit_two_wave() in 02_fit_erie_model.R).
+#'   than leaving it to find an unrelated local optimum, and `excess` (the
+#'   deviation's own magnitude) is useful for judging how strong that
+#'   evidence is - e.g. gating a "definitely two_wave" fast path for
+#'   unambiguous cases (see fit_one() in 02_fit_erie_model.R).
 peak_dip_rise_info <- function(times, conc, min_rise_frac = 0.15, min_first_peak_frac = 0.5) {
-  none <- list(detected = FALSE, trigger_time = NA_real_)
+  none <- list(detected = FALSE, trigger_time = NA_real_, excess = NA_real_)
   ord <- order(times)
   t <- times[ord]; c <- conc[ord]
   n <- length(c)
@@ -112,7 +114,7 @@ peak_dip_rise_info <- function(times, conc, min_rise_frac = 0.15, min_first_peak
     excess <- (c[i] - interp) / interp
     if (excess > best_excess) { best_excess <- excess; best_time <- t[i] }
   }
-  if (best_excess >= min_rise_frac) return(list(detected = TRUE, trigger_time = best_time))
+  if (best_excess >= min_rise_frac) return(list(detected = TRUE, trigger_time = best_time, excess = best_excess))
   none
 }
 
