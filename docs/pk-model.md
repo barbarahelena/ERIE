@@ -183,48 +183,64 @@ earn a second wave" from being answered by 13C6's fit quality instead, and
 avoids the cross-curve concentration-scale mixing problem a combined AIC
 would have.
 
-Three rules override a pure AIC comparison:
+Two rules override a pure AIC comparison:
 - **`two_wave` is never attempted when 12C's t=30 sample is missing.**
   Without it, the 0-60min window has only its t=0/t=60 endpoints to anchor a
   5-parameter fit - under-identified, and AIC would otherwise rubber-stamp
   whatever shape 5 sparse points can fit almost exactly. Found via `ER05`
   FCT1 (t=30, 90, 150, 240 all missing - only 5 real points for 12C).
-- **`two_wave` is never attempted unless 12C's own raw observations show an
-  actual peak-dip-rise pattern** (`has_peak_dip_rise()` in
-  `pk_diagnostics.R`: a post-peak local trough followed by a subsequent
-  rise of >=15% of that curve's own peak, requiring the candidate first
-  peak itself to be at least 50% of the overall peak so an early,
-  low-concentration noise wobble isn't mistaken for one - the same
-  threshold-free check used to characterize dip prevalence across the
-  cohort, at the top of this section). This is the strongest of the three
-  gates: fitting `two_wave` first and relying on AIC/R² to notice
-  afterward that there was nothing to explain lets a flexible model
-  produce a statistically-plausible-*looking* fit (good R², even
-  reasonably moderate parameters after the `t_lag` bound fix above) for a
-  curve that never had a second wave at all. Concretely, checking the raw
-  data directly (rather than only the fitted result) revealed that `ER03`
-  FCT1 and `ER06` FCT1/FCT2 - all previously accepted `two_wave` fits with
-  good R² - have **no actual dip-then-rise in their own raw 12C data**:
-  `ER03` FCT1 shows a flattening in its decline, not a rise; `ER06` FCT1
-  has only a ~8%-of-peak wobble, below the 15% threshold; `ER06` FCT2 is
-  simply a single peak at t=60 with a monotonic decline after. The two
-  clearest genuine-dip subjects, `ER01` and `ER09`, pass this check
-  unchanged (a real dip followed by a taller second peak) on all four of
-  their curves.
-- **`two_wave` is never attempted when `single_wave` already fits 12C with
-  R² > 0.95** (`R2_SINGLE_WAVE_SKIP_TWO_WAVE`). AIC has no concept of
-  whether a shape is physiologically real, and with only 8-9 sparse points,
-  2 extra degrees of freedom can find a "better" fit that's just exploiting
-  flexibility rather than capturing a genuine second wave (confirmed on
-  `ER06` FCT2 in an earlier run: a single_wave R² of 0.980 was still beaten
-  by `two_wave`'s AIC, a real ~10x RSS reduction, not noise - yet the
-  resulting shape read as invented, not biologically plausible). Once the
-  simple model already explains the data well, that risk isn't judged
-  worth taking. This gate and the peak-dip-rise gate above catch
-  overlapping but not identical cases - a curve can fail the R² gate
-  (single_wave already explains it well) while still showing SOME raw dip,
-  or pass the R² gate (single_wave R² <= 0.95) while showing no raw dip at
-  all - so both are kept.
+- **`two_wave` is never attempted unless 12C's own raw observations show
+  EITHER a peak-dip-rise pattern OR a plateau/near-equal peak neighbor.**
+  Fitting `two_wave` first and relying on AIC to notice afterward that
+  there was nothing to explain lets a flexible model produce a
+  statistically-plausible-*looking* fit for a curve that never had a
+  second wave at all - checking the raw data directly catches this before
+  it happens. Two complementary checks, both in `pk_diagnostics.R`:
+  - `has_peak_dip_rise()`: a post-peak local trough followed by a
+    subsequent rise of >=15% of that curve's own peak (the same
+    threshold-free check used to characterize dip prevalence across the
+    cohort, at the top of this section).
+  - `has_near_peak_neighbor()`: the point immediately before or after the
+    curve's own peak is at least 85% of the peak's height - catching two
+    waves that overlap closely enough in time to blend into a flat top or
+    an irregular rise WITHOUT ever producing a visible dip, which
+    `has_peak_dip_rise()` structurally cannot see. Found via `ER02` FCT1 (a
+    genuine flat top, R² 0.955->0.997), `ER30` FCT1 (an irregular
+    pre-peak rise, R² 0.859->0.957) - both real, well-bounded improvements
+    the dip-only check missed entirely. Deliberately excludes t=30 as a
+    valid "near" neighbor: being close to the eventual peak at the very
+    first sample just reflects ordinary fast absorption (there's no
+    earlier sample to show a genuinely different pre-peak trajectory), not
+    evidence of a second wave - found on `ER06` FCT2, whose only "near-peak"
+    point was t=30, and whose `two_wave` fit consistently pinned `t_lag`
+    exactly at its own lower bound rather than settling in the interior
+    the way genuine cases do (`ER02`'s 51.5min, `ER30`'s 75.7min) - a sign
+    the fit still wanted to exploit the unsampled 0-30min gap, just
+    clipped at the boundary, not a freely-preferred timing.
+
+**Removed:** the earlier third rule (never attempt `two_wave` when
+`single_wave` already fits with R² > 0.95) turned out not to be doing the
+actual protective work its rationale implied. It wasn't even the thing
+blocking the two cases above - `ER30` FCT1's `single_wave` R² was 0.846,
+nowhere near the 0.95 threshold, yet it was still being missed by the
+(then dip-only) raw-data gate, not by this rule. AIC alone, combined with
+the two rules above and the degenerate-fit exploits already bounded out
+(`t_lag`'s data-dependent lower bound, per-wave `MIN_TMAX`, `ka`=`kel`
+diagonal seeding), is trusted to judge whether the extra complexity earns
+its keep.
+
+**Tried and reverted: AICc.** With only 8-9 points per curve and `k`
+jumping from 3 to 5 between candidates, plain AIC's complexity penalty
+(`2k`) looked too weak to lean on once `two_wave` started being attempted
+much more broadly (both gates above, no R² pre-filter). AICc (the standard
+small-sample correction, `+2k(k+1)/(n-k-1)`) was tried as a fix - but at
+n=8 it raises the complexity gap between k=3 and k=5 from 4 points to 28,
+which is *so* aggressive it re-excluded all three of the confirmed-genuine
+cases above (`ER02`, `ER06` FCT2 in the k_release-fixed sense, `ER30` - all
+lost to `single_wave` under AICc despite large, independently-verified R²
+improvements). Overcorrecting for small n isn't the right lever here; the
+raw-data gates and the bounded-out exploits are what's actually supposed
+to be doing the overfitting-protection work.
 
 ### 13C6's own wave choice
 

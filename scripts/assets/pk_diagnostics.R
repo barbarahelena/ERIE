@@ -118,6 +118,58 @@ peak_dip_rise_info <- function(times, conc, min_rise_frac = 0.15, min_first_peak
   none
 }
 
+#' Whether a curve's peak has a near-equal-height neighbor - a plateau or
+#' two closely-overlapping waves, rather than one clean single maximum
+#'
+#' A different, complementary signature from [peak_dip_rise_info()]: two
+#' waves close enough together in time don't necessarily produce a visible
+#' dip at all - they can instead blend into a flat top (the peak and an
+#' adjacent point both tall) or an irregular, non-smoothly-decelerating
+#' rise (the point before the peak already unusually tall). A genuine
+#' single-compartment absorption curve has one clean maximum; its
+#' immediately adjacent points are not usually THIS close to the peak
+#' itself. Confirmed on real fitted results where this catches cases
+#' `peak_dip_rise_info()` structurally cannot (no visible trough exists to
+#' detect): `ER02` FCT1 (peak 86.3 at t=60, both neighbors within 91-93% of
+#' it - a genuine two-wave fit reaches R2=0.997 vs single_wave's 0.955),
+#' `ER06` FCT2 (peak 92.7, t=30 neighbor at 86% - R2=0.9985 vs 0.981-0.986),
+#' `ER30` FCT1 (peak 77.1 at t=120, its PRE-peak neighbor at 93% - single
+#' wave tops out at R2=0.859, two-wave reaches 0.957).
+#'
+#' @param times,conc Numeric vectors of equal length, one curve's own
+#'   observed sampling times and concentrations.
+#' @param near_peak_frac A neighbor immediately before or after the peak
+#'   counts as evidence if it's at least this fraction of the peak's own
+#'   height (default 0.85, i.e. 85%).
+#' @return TRUE if the point immediately before or immediately after the
+#'   curve's own maximum (EXCLUDING t=30, see below) is at least
+#'   `near_peak_frac` of the peak's height.
+has_near_peak_neighbor <- function(times, conc, near_peak_frac = 0.85) {
+  ord <- order(times)
+  t <- times[ord]; c <- conc[ord]
+  n <- length(c)
+  if (n < 3) return(FALSE)
+  peak_idx <- which.max(c)
+  peak <- c[peak_idx]
+  if (peak <= 0) return(FALSE)
+  neighbor_idx <- c(peak_idx - 1, peak_idx + 1)
+  neighbor_idx <- neighbor_idx[neighbor_idx >= 1 & neighbor_idx <= n]
+  # t=30 specifically excluded as valid evidence: it's the first real
+  # sample for virtually every curve, so being close to the eventual peak
+  # there just reflects ordinary fast absorption (there's no earlier
+  # sample to show a genuinely different pre-peak trajectory) - it isn't
+  # distinctive of a second wave the way a LATER near-peak neighbor is.
+  # Found on ER06 FCT2: its only "near-peak" point was t=30 (86% of peak),
+  # and its t_lag under two_wave consistently landed exactly on its own
+  # lower bound rather than settling in the interior like genuine cases
+  # (ER02's 51.5, ER30's 75.7) - a sign the fit was still trying to exploit
+  # the unsampled 0-30min gap, just clipped at the boundary, not a
+  # genuinely-preferred timing.
+  neighbor_idx <- neighbor_idx[t[neighbor_idx] != 30]
+  if (length(neighbor_idx) == 0) return(FALSE)
+  any(c[neighbor_idx] / peak >= near_peak_frac)
+}
+
 #' Whether a curve's own first real observation suggests a genuine onset
 #' delay (absorption hadn't really started yet), not just an ordinarily
 #' slow rise

@@ -8,22 +8,31 @@
 #     minority of curves - single_wave is structurally incapable of it (a
 #     one-compartment absorption curve is monotonic after its single peak
 #     for any parameter values).
-# Selection is by AIC on 12C's own residuals, gated by three rules that
+# Selection is by AIC on 12C's own residuals, gated by two rules that
 # override a pure fit-quality comparison - two_wave is never attempted when:
 #   1. 12C's t=30 sample is missing (the 0-60min window is then
 #      under-identified);
-#   2. 12C's own raw observations show no post-peak dip-then-rise at all
-#      (has_peak_dip_rise() in pk_diagnostics.R) - there has to be direct
-#      evidence of the phenomenon in the data, not just AIC/R2 noticing
-#      after the fact that a flexible model found SOME improvement;
-#   3. single_wave already fits 12C with R2 > 0.95 (AIC alone can't tell a
-#      genuine second wave from an implausible one exploiting 2 extra
-#      degrees of freedom on 8-9 sparse points).
-# See the comments on fit_subject_visit_two_wave(), fit_one(), and the
-# "Model selection" block below for the evidence behind each. 13C6 gets its
-# own independent choice of how much of ITS dose rode the second wave
-# (f_delayed_13C6, separate from 12C's f_delayed) once 12C's structure is
-# decided - see the comment on fit_subject_visit_two_wave().
+#   2. 12C's own raw observations show no evidence of a second wave at all
+#      - either a post-peak dip-then-rise (has_peak_dip_rise() in
+#      pk_diagnostics.R) or a near-equal-height neighbor right next to the
+#      peak (has_near_peak_neighbor() - two overlapping waves close enough
+#      together in time can blend into a flat top or an irregular rise
+#      without ever producing a visible dip). There has to be direct
+#      evidence of the phenomenon in the data, not just AIC noticing after
+#      the fact that a flexible model found SOME improvement.
+# A THIRD rule, single_wave already fitting 12C with R2 > 0.95, was tried
+# and then removed: it wasn't actually the thing blocking genuine two_wave
+# improvements (several, e.g. ER30 FCT1 at R2=0.846, were already well
+# below it) and was redundant with the AIC comparison itself once the
+# raw-data gate above was broadened to catch plateaus and the degenerate-
+# fit exploits were bounded out (the data-dependent t_lag floor, per-wave
+# MIN_TMAX, ka=kel diagonal seeding) - AIC alone is now trusted to judge
+# whether the extra complexity earns its keep, once evidence justifies
+# trying at all. See the comments on fit_subject_visit_two_wave(), fit_one(),
+# and the "Model selection" block below for the evidence behind each.
+# 13C6 gets its own independent choice of how much of ITS dose rode the
+# second wave (f_delayed_13C6, separate from 12C's f_delayed) once 12C's
+# structure is decided - see the comment on fit_subject_visit_two_wave().
 #
 # Both models use an UNWEIGHTED objective (proportional_weighting = FALSE),
 # changed from the previous default. Confirmed by direct comparison on ER03
@@ -471,24 +480,32 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
   # 240 all missing - only 5 real points for 12C).
   if (!any(obs12$time_min == 30)) return(mutate(empty, t30_present = FALSE))
   # Require actual evidence of a second wave in 12C's own raw observations -
-  # a post-peak deviation from a smooth decline, >=15% above what linear
-  # interpolation between neighbors predicts (peak_dip_rise_info(), the same
-  # threshold-free check used to characterize dip prevalence across the
-  # cohort - see "The post-peak dip and the lagged-dose model" in
-  # docs/pk-model.md). Without this, two_wave would be tried on every curve
-  # regardless of shape, leaving AIC/R2 to notice only after the fact that
-  # there was nothing to explain - the same "making stuff up" failure
-  # R2_SINGLE_WAVE_SKIP_TWO_WAVE guards against below, just checked directly
-  # against the data one step earlier instead of indirectly through
-  # single_wave's fit quality. dip_evidence$trigger_time (the timing of the
-  # point that actually justified trying two_wave) is kept and used to seed
-  # the search below - found on ER04 FCT1 that passing this gate does NOT
-  # guarantee the optimizer's generic seeds find a fit anywhere near that
-  # evidence: it landed on an unrelated, spuriously-slightly-better-AIC
-  # local optimum (t_lag=21.6, an early near-total-delay trick) instead of
-  # the genuine t=150 plateau that triggered the gate in the first place.
+  # EITHER a post-peak deviation from a smooth decline (peak_dip_rise_info(),
+  # >=15% above what linear interpolation between neighbors predicts) OR a
+  # near-equal-height neighbor right next to the peak (has_near_peak_neighbor()
+  # - two waves close enough together in time don't always produce a visible
+  # dip; they can blend into a flat top or an irregular rise instead, which
+  # peak_dip_rise_info() structurally cannot see since there's no trough to
+  # find). Without this, two_wave would be tried on every curve regardless
+  # of shape, leaving AIC to notice only after the fact whether there was
+  # anything to explain - checked directly against the data one step
+  # earlier instead. Found via direct verification (grid/multistart search
+  # outside the normal bounds-checked pipeline) that this was blocking real,
+  # well-bounded, non-degenerate improvements: ER02 FCT1 (a flat top - both
+  # neighbors within 91-93% of the peak - R2 0.955->0.997), ER06 FCT2 (peak
+  # neighbor at 86% - R2 0.981->0.9985), ER30 FCT1 (irregular pre-peak rise,
+  # neighbor at 93% - R2 0.859->0.957) - none of these show a post-peak dip
+  # at all, so peak_dip_rise_info() alone can never catch them.
+  # dip_evidence$trigger_time (when the dip check specifically fired) is
+  # kept and used to seed the search below - found on ER04 FCT1 that
+  # passing this gate does NOT guarantee the optimizer's generic seeds find
+  # a fit anywhere near the evidence: it landed on an unrelated, spuriously-
+  # slightly-better-AIC local optimum (t_lag=21.6, an early near-total-delay
+  # trick) instead of the genuine t=150 plateau that triggered the gate in
+  # the first place.
   dip_evidence <- peak_dip_rise_info(obs12$time_min, obs12$conc_mgL)
-  if (!dip_evidence$detected) return(mutate(empty, t30_present = TRUE))
+  plateau_evidence <- has_near_peak_neighbor(obs12$time_min, obs12$conc_mgL)
+  if (!dip_evidence$detected && !plateau_evidence) return(mutate(empty, t30_present = TRUE))
 
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
   Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
@@ -663,19 +680,18 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
 # ---------------------------------------------------------------------------
 # Run both candidate models for every subject x visit
 # ---------------------------------------------------------------------------
-R2_SINGLE_WAVE_SKIP_TWO_WAVE <- 0.95   # see the comment on skip_two_wave below
 # Deviation magnitude (peak_dip_rise_info()'s $excess) above which the raw
 # data is treated as UNAMBIGUOUS evidence of a genuine second wave, strong
-# enough to override both the R2>0.95 skip and, later, the AIC comparison
-# itself (see the model-selection block below). Set well above the 15%
-# detection floor and above ER01's own 0.40 (a clearly genuine, but
-# unremarkable-by-comparison, case) - chosen from the actual cohort
-# distribution: only ER08 FCT1 (1.57) and ER11 FCT1 (1.01) clear this bar,
-# both independently confirmed genuine (ER08: corroborated by 13C6 peaking
-# at the identical timepoint; ER11: a clean, sustained dip-then-peak, not
-# just a single-point spike). Deliberately conservative - most real dip
-# cases (including ER01, ER09) still go through the standard AIC
-# comparison, which already handles them correctly.
+# enough to override the AIC comparison itself (see the model-selection
+# block below). Set well above the 15% detection floor and above ER01's
+# own 0.40 (a clearly genuine, but unremarkable-by-comparison, case) -
+# chosen from the actual cohort distribution: only ER08 FCT1 (1.57) and
+# ER11 FCT1 (1.01) clear this bar, both independently confirmed genuine
+# (ER08: corroborated by 13C6 peaking at the identical timepoint; ER11: a
+# clean, sustained dip-then-peak, not just a single-point spike).
+# Deliberately conservative - most real dip cases (including ER01, ER09)
+# still go through the standard AIC comparison, which already handles them
+# correctly.
 EXCESS_DEFINITE_TWO_WAVE <- 0.90
 
 fit_one <- function(i) {
@@ -688,35 +704,22 @@ fit_one <- function(i) {
   dip_evidence <- if (nrow(obs12_raw) >= 4) peak_dip_rise_info(obs12_raw$time_min, obs12_raw$conc_mgL) else list(detected = FALSE, excess = NA_real_)
   definite_two_wave <- isTRUE(dip_evidence$detected) && !is.na(dip_evidence$excess) && dip_evidence$excess >= EXCESS_DEFINITE_TWO_WAVE
 
-  # If single_wave already fits 12C very well, don't try two_wave at all -
-  # not a computational shortcut (AIC on ER06 FCT2 showed a >0.95 R2 single
-  # fit CAN still be decisively beaten by two_wave, a real ~10x RSS
-  # reduction, not noise), but a deliberate choice to not trust a purely
-  # statistical fit-improvement criterion over biological plausibility once
-  # the data is already well explained. AIC has no concept of whether a
-  # shape is physiologically real; with only 8-9 sparse points, 2 extra
-  # degrees of freedom can find a "better" fit that's just exploiting
-  # flexibility rather than a genuine second absorption wave, and that
-  # risk is judged not worth taking once the simple model already works.
-  # Overridden when the raw-data evidence is unambiguous (definite_two_wave)
-  # - if the data itself makes a second wave obvious, single_wave's R2
-  # alone shouldn't veto even trying it (and forcing single_wave to
-  # "explain" an unambiguous two-wave curve risks distorting its own ka/kel,
-  # not just missing the second wave - see the ka=kel local-optimum TODO).
-  skip_two_wave <- !is.na(sw$r2_12C) && sw$r2_12C > R2_SINGLE_WAVE_SKIP_TWO_WAVE && !definite_two_wave
-  if (skip_two_wave) {
-    cat(sid, vis, "(two_wave skipped - single_wave R2 =", round(sw$r2_12C, 3), "already >",
-        R2_SINGLE_WAVE_SKIP_TWO_WAVE, ")\n")
-    tw <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA,
-                 f_delayed = NA, t_lag = NA, f_delayed_13C6 = NA,
-                 r2_12C = NA, r2_13C6 = NA, kel_at_bound = NA, k_release_at_bound = NA,
-                 converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA,
-                 rss_12C = NA, n_12C = NA, t30_present = sw$t30_present)
-  } else {
-    set.seed(string_seed(paste(sid, vis, "two_wave")))
-    cat(sid, vis, if (definite_two_wave) "(two_wave - definite evidence)" else "(two_wave)", "\n")
-    tw <- fit_subject_visit_two_wave(sid, vis)
-  }
+  # two_wave is no longer skipped based on single_wave's own R2 - that
+  # skip existed to guard against AIC "making stuff up" on curves already
+  # well explained, but single_wave's R2 turned out to be the wrong signal
+  # for that: several curves with single_wave R2 well below 0.95 (ER30
+  # FCT1: 0.846) were STILL only blocked by the raw-data gate, not by this
+  # skip, while genuinely good two_wave improvements (ER02 FCT1, ER06 FCT2)
+  # were being missed entirely by the OLD, dip-only raw-data gate rather
+  # than correctly caught and then fairly judged by AIC. Now that the
+  # raw-data gate also catches plateaus (has_near_peak_neighbor(), see
+  # fit_subject_visit_two_wave()) and the degenerate-fit exploits are
+  # bounded out (the data-dependent t_lag floor, per-wave MIN_TMAX, ka=kel
+  # diagonal seeding), the AIC comparison itself - not a pre-emptive R2
+  # veto - is trusted to decide whether the extra complexity earns its keep.
+  set.seed(string_seed(paste(sid, vis, "two_wave")))
+  cat(sid, vis, if (definite_two_wave) "(two_wave - definite evidence)" else "(two_wave)", "\n")
+  tw <- fit_subject_visit_two_wave(sid, vis)
   list(single_wave = sw, two_wave = tw, definite_two_wave = definite_two_wave)
 }
 
@@ -799,6 +802,20 @@ two_wave_results$capsule_dissolution_halflife_min <- log(2) / two_wave_results$k
 K_12C_SINGLE_WAVE <- 3   # ka, kel, F_12C
 K_12C_TWO_WAVE    <- 5   # + f_delayed, t_lag
 
+# Plain AIC, not AICc: AICc (the standard small-sample correction,
+# +2k(k+1)/(n-k-1)) was tried and reverted - at n=8 with k jumping from 3
+# to 5, its correction is so aggressive (raising the complexity gap from 4
+# points to 28) that it re-excluded ALL THREE of the confirmed-genuine
+# plateau cases that motivated widening the raw-data gate in the first
+# place (ER02 FCT1, ER06 FCT2, ER30 FCT1 - all lost to single_wave under
+# AICc despite large, independently-verified R2 improvements of
+# 0.04-0.10+). Overcorrecting for small n isn't the right lever here - the
+# raw-data gate itself (requiring real dip-or-plateau evidence, not just
+# AIC finding SOME improvement) and the bounded-out degenerate-fit exploits
+# (the data-dependent t_lag floor, per-wave MIN_TMAX, ka=kel diagonal
+# seeding) are what's actually supposed to be doing the overfitting-
+# protection work, not an extra-harsh information criterion that throws
+# out real signal along with noise.
 aic <- function(rss, n, k) n * log(rss / n) + 2 * k
 
 sw <- single_wave_results %>% select(subject_id, visit, rss_12C, n_12C) %>%
@@ -814,12 +831,11 @@ selection <- sw %>% left_join(tw, by = c("subject_id", "visit")) %>%
       is.na(aic_single_wave) & is.na(aic_two_wave) ~ NA_character_,
       is.na(aic_two_wave)                          ~ "single_wave",
       # definite_two_wave (see EXCESS_DEFINITE_TWO_WAVE above) overrides
-      # the AIC comparison itself, not just the R2>0.95 skip: if the raw
-      # data makes a second wave unambiguous, a marginal AIC edge for
-      # single_wave (e.g. from 13C6's noise leaking in via retry
-      # selection, or an unlucky local optimum) shouldn't be allowed to
-      # override direct visual evidence - only a failed two_wave fit
-      # (aic_two_wave NA, caught above) does.
+      # the AIC comparison itself: if the raw data makes a second wave
+      # unambiguous, a marginal AIC edge for single_wave (e.g. from an
+      # unlucky local optimum) shouldn't be allowed to override direct
+      # visual evidence - only a failed two_wave fit (aic_two_wave NA,
+      # caught above) does.
       definite_two_wave %in% TRUE                  ~ "two_wave",
       is.na(aic_single_wave)                       ~ "two_wave",
       aic_two_wave < aic_single_wave                ~ "two_wave",
