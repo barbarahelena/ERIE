@@ -87,9 +87,11 @@ simulate_fit <- function(sid, vis, r) {
     sim13 <- simulate_lagged_dose(simB, fine, dose_13C6_mg, r$f_delayed_13C6, r$t_lag)
   } else {
     sim12 <- bateman_conc(fine, r$ka, r$kel, r$F_12C, dose_12C, Vd)
+    simB_instant <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, Vd)
     sim13 <- if (!is.na(r$t_lag1_13C6)) {
-      simB <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, Vd)
-      simulate_two_lag_dose(simB, fine, dose_13C6_mg, f_delayed = 0, t_lag1 = r$t_lag1_13C6, gap = 0)
+      simulate_two_lag_dose(simB_instant, fine, dose_13C6_mg, f_delayed = 0, t_lag1 = r$t_lag1_13C6, gap = 0)
+    } else if (!is.na(r$t_lag2_13C6)) {
+      simulate_lagged_dose(simB_instant, fine, dose_13C6_mg, r$f_delayed2_13C6, r$t_lag2_13C6)
     } else {
       simulate_delayed_release(fine, r$k_release, r$ka, r$kel, r$F_13C6, dose_13C6_mg, Vd)$conc
     }

@@ -337,6 +337,47 @@ parameter with no fit-quality benefit. Now modeled as an instant bolus at
 `t_lag1_13C6` (plain `bateman_conc`, no capsule-release step at all),
 K=2 instead of 3, compared fairly against the no-lag candidate (also K=2).
 
+**Fixed:** 13C6 now also gets its own separate-second-hump option
+(`f_delayed2_13C6`/`t_lag2_13C6`), gated on 13C6's own raw data by the same
+`has_peak_dip_rise()`/`has_near_peak_neighbor()` detectors that gate 12C's
+`two_wave` attempt - a different phenomenon from the onset lag directly
+above (a delay before absorption starts at all): a genuinely separate wave
+arriving after the first is already underway, same shape as 12C's own
+`two_wave` model but decided from 13C6's own evidence, not inherited from
+12C's structure.
+
+13C6 is markedly noisier than 12C, and this needed extra caution. A
+cohort-wide scan of the same two detectors against 13C6's own raw data
+flagged ~69% of curves - at least as high a rate as 12C's own - which is a
+warning sign given 13C6's much lower absolute signal and higher relative
+noise. Standalone validation before implementing confirmed the concern
+directly: `ER21` FCT1 (the strongest `dip_excess` in the cohort, 3.416)
+"improved" R² 0.508->0.741, but only by pinning `f_delayed2_13C6`=0.999 -
+the same near-total-delay degenerate pattern already distrusted for 12C's
+`t_lag`/`f_delayed` (see the `ER06` FCT2 case in `BOUNDS_LAGGED`'s
+comment) - driven by a late, near-zero crash-then-rebound (0.0117 mg/L at
+t=150, 0.0354 at t=180) that reads as measurement noise, not a real second
+dose. Two other candidates looked genuine by contrast: `ER11` FCT1 (R²
+0.787->0.846, `f_delayed2_13C6`=0.751) and `ER18` FCT2 (R² 0.860->0.879,
+`f_delayed2_13C6`=0.095) - both comfortably away from the extremes.
+
+So two safeguards beyond what 12C's own `two_wave` needed are applied
+here:
+- `f_delayed2_13C6` is bounded to `[0.05, 0.95]`, not 12C's
+  `[0.001, 0.999]` - directly excludes the near-total-delay trick that made
+  `ER21` look good on paper.
+- `t_lag2_13C6` is bounded to `[30, 150]`, not down to 5 - the onset-lag
+  candidate above already owns "delay before the wave starts at all"; this
+  candidate only needs to (and should only be allowed to) model a
+  genuinely LATER, separate hump, not also compete for the same unsampled
+  0-30min gap.
+
+Modeled with a plain `bateman_conc` per wave (instant bolus), same as the
+onset-lag candidate and for the same reason. Compared via AIC (K=3) against
+whichever candidate is currently winning (no-lag or onset-lag, K=2 either
+way) - mutually exclusive with the onset-lag candidate, since both explain
+the same flat/slow start in different ways.
+
 **Tested but deliberately not adopted (yet):**
 - **A two-lag onset-time extension** (`simulate_two_lag_dose()`, also in
   `pk_curves.R`) that gives the *first* wave its own fittable onset delay
