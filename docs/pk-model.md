@@ -311,17 +311,15 @@ plus a third found along the way: `ER25` FCT1 (R² 0.71->0.94, `t_lag1_13C6`
 = 25min), `ER06` FCT2 (R² 0.64->0.94, 28min), `ER25` FCT2 (R² ->0.75,
 27min, no prior baseline - not part of the original 2-subject validation).
 
-**Known limitation, not yet addressed (TODO):**
-- **`k_release` is pinned exactly at its upper bound in all 3 validated
-  cases above once `t_lag1_13C6` is used** (`ER06` FCT2, `ER25` FCT1,
-  `ER25` FCT2 - 3 for 3, not a coincidence). Once the onset delay accounts
-  for the flat start, 30min sampling can't distinguish "fast dissolution"
-  from "instant" - `k_release` isn't identifiable in this regime, it's
-  just being pushed to "as fast as allowed" rather than settling on a
-  meaningful finite value. Likely fix: an instant-bolus release candidate
-  (drop `k_release` entirely once `t_lag1_13C6` is used, K=2 instead of 3)
-  rather than carrying a boundary-pinned nuisance parameter - not yet
-  implemented.
+**Fixed:** the onset-lag candidate no longer carries `k_release` at all.
+It was pinned exactly at its upper bound in all 3 originally-validated
+cases (`ER06` FCT2, `ER25` FCT1, `ER25` FCT2 - 3 for 3, not a coincidence)
+once `t_lag1_13C6` was in the model - 30min sampling can't distinguish
+"fast dissolution" from "instant" once the delay itself already explains
+the flat start, so it was just an unidentifiable, boundary-pinned nuisance
+parameter with no fit-quality benefit. Now modeled as an instant bolus at
+`t_lag1_13C6` (plain `bateman_conc`, no capsule-release step at all),
+K=2 instead of 3, compared fairly against the no-lag candidate (also K=2).
 
 **Tested but deliberately not adopted (yet):**
 - **A two-lag onset-time extension** (`simulate_two_lag_dose()`, also in
