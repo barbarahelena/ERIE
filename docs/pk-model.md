@@ -289,33 +289,39 @@ separate, still-open question (see below).
   worth revisiting if a fitted wave's peak is ever found landing inside one
   of those wider gaps specifically, rather than adding a blanket upper
   bound pre-emptively.
-- **13C6's capsule release (`k_release` in `simulate_delayed_release()`) has
-  no genuine onset lag, only smooth first-order dissolution starting at
-  t=0 (fastest right at t=0, when the capsule reservoir is fullest).** It
-  cannot represent a curve whose 13C6 signal is genuinely near-zero for the
-  first ~30min and then rises sharply - the optimizer is forced to
-  compromise, letting some release happen early (overshooting the real
-  early timepoints) to still reach the observed later peak. Confirmed on
-  two subjects with an otherwise good `single_wave` fit: `ER25` FCT1
-  (fitted curve predicts 0.114 mg/L at t=30 vs. an observed 0.035 - the
-  real curve doesn't reach that concentration until well after) and `ER06`
-  FCT2 (predicts 0.109 at t=30 vs. an observed 0.004 - about a 26x
-  overshoot), while both fit the later peak reasonably. This is
-  independent of whether 12C shows a second gastric-emptying wave at all -
-  both of these subjects' 12C curves are perfectly smooth single peaks, so
-  `two_wave` (and 13C6's `f_delayed_13C6`) was correctly never attempted
-  for them; 13C6's own onset-delay need has nothing to do with 12C's shape.
-  Proposed approach (discussed, not yet built): reuse the already-validated
-  `simulate_lagged_dose()` wrapped around `simulate_delayed_release()` -
-  not the separate, previously-abandoned `simulate_two_lag_dose()` - as its
-  own feature independent of 12C's wave choice, gated by direct evidence in
-  13C6's own raw data (analogous to `has_peak_dip_rise()` for 12C) rather
-  than left to AIC/R² alone. 13C6 is already the noisier curve with only
-  8-9 sparse points (22/68 curves below the 0.70 reliability threshold);
-  adding another free parameter to fit its signal without a raw-data gate
-  risks exactly the "making stuff up" failure mode already guarded against
-  for 12C's two-wave model, with no second curve's worth of independent
-  evidence to cross-check it against.
+**Fixed:** 13C6 now gets its own onset-delay option (`t_lag1_13C6`),
+independent of 12C's wave choice. `simulate_delayed_release()`'s smooth
+first-order dissolution (fastest right at t=0) couldn't represent a curve
+whose 13C6 signal is genuinely near-zero for the first ~30min and then
+rises sharply - the optimizer was forced to compromise, letting some
+release happen early (overshooting the real early timepoints) to still
+reach the observed later peak. Implemented via `simulate_two_lag_dose()`
+(already in `pk_curves.R`) with `f_delayed` fixed at 0, which reduces it to
+a pure onset-delayed single wave - the entire dose simulated as normal,
+just starting `t_lag1_13C6` minutes late, with no risk of the "near-total
+delay disguised as a second wave" failure mode `t_lag`/`f_delayed` had for
+12C (there's no second, undelayed portion here to hide behind). Gated by
+`has_onset_lag_evidence()` (a different phenomenon from 12C's
+`has_peak_dip_rise()`: the FIRST observed point being a small fraction of
+the curve's own peak, not a post-peak deviation), and only kept if it beats
+the no-lag fit on AIC (K=2 vs K=3, computed on 13C6's own residuals, with
+`ka`/`kel` fixed at the joint fit's values - never touches 12C's own
+reported parameters). Validated on the two originally-confirmed subjects
+plus a third found along the way: `ER25` FCT1 (R² 0.71->0.94, `t_lag1_13C6`
+= 25min), `ER06` FCT2 (R² 0.64->0.94, 28min), `ER25` FCT2 (R² ->0.75,
+27min, no prior baseline - not part of the original 2-subject validation).
+
+**Known limitation, not yet addressed (TODO):**
+- **`k_release` is pinned exactly at its upper bound in all 3 validated
+  cases above once `t_lag1_13C6` is used** (`ER06` FCT2, `ER25` FCT1,
+  `ER25` FCT2 - 3 for 3, not a coincidence). Once the onset delay accounts
+  for the flat start, 30min sampling can't distinguish "fast dissolution"
+  from "instant" - `k_release` isn't identifiable in this regime, it's
+  just being pushed to "as fast as allowed" rather than settling on a
+  meaningful finite value. Likely fix: an instant-bolus release candidate
+  (drop `k_release` entirely once `t_lag1_13C6` is used, K=2 instead of 3)
+  rather than carrying a boundary-pinned nuisance parameter - not yet
+  implemented.
 
 **Tested but deliberately not adopted (yet):**
 - **A two-lag onset-time extension** (`simulate_two_lag_dose()`, also in

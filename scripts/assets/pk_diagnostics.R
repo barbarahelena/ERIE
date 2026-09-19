@@ -116,6 +116,34 @@ peak_dip_rise_info <- function(times, conc, min_rise_frac = 0.15, min_first_peak
   none
 }
 
+#' Whether a curve's own first real observation suggests a genuine onset
+#' delay (absorption hadn't really started yet), not just an ordinarily
+#' slow rise
+#'
+#' A different phenomenon from [peak_dip_rise_info()] - a delay before a
+#' SINGLE wave starts at all (a standard PK "absorption lag time" concept),
+#' not a second, separate wave. Simple and threshold-free: if the first
+#' observed point is only a small fraction of the curve's own eventual
+#' peak, that's consistent with "nothing had happened yet" rather than an
+#' ordinary gradual rise.
+#'
+#' @param times,conc Numeric vectors of equal length, one curve's own
+#'   observed sampling times and concentrations.
+#' @param min_first_frac The first point must be below this fraction of the
+#'   curve's own peak to count as onset-lag evidence (default 0.25) -
+#'   comfortably above both confirmed cases this was validated against
+#'   (ER25 FCT1: 18.4%, ER06 FCT2: 2.2%).
+#' @return TRUE if the first observed point is below `min_first_frac` of
+#'   the curve's own peak.
+has_onset_lag_evidence <- function(times, conc, min_first_frac = 0.25) {
+  ord <- order(times)
+  c <- conc[ord]
+  if (length(c) < 3) return(FALSE)
+  peak <- max(c)
+  if (peak <= 0) return(FALSE)
+  c[1] / peak < min_first_frac
+}
+
 #' Boolean-only wrapper around [peak_dip_rise_info()] - see there for details.
 has_peak_dip_rise <- function(times, conc, min_rise_frac = 0.15, min_first_peak_frac = 0.5) {
   peak_dip_rise_info(times, conc, min_rise_frac, min_first_peak_frac)$detected

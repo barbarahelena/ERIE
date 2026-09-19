@@ -279,7 +279,7 @@ fit_curve_independent <- function(obs_time, obs_conc, dose, Vd) {
 # delayed-release step. extra_seeds/maxit let the retry pass reuse this.
 # ---------------------------------------------------------------------------
 fit_subject_visit_single_wave <- function(sid, vis, extra_seeds = list(), maxit = 40) {
-  empty <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA,
+  empty <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA, t_lag1_13C6 = NA,
                    r2_12C = NA, r2_13C6 = NA, kel_at_bound = NA, k_release_at_bound = NA,
                    converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA,
                    rss_12C = NA, n_12C = NA, t30_present = NA)
@@ -345,9 +345,50 @@ fit_subject_visit_single_wave <- function(sid, vis, extra_seeds = list(), maxit 
   r2_12C  <- r_squared(curve_12C$conc, pred12)
   r2_13C6 <- r_squared(curve_13C6$conc, pred13)
 
+  # 13C6's own onset lag: if its raw data shows evidence absorption hadn't
+  # started yet (has_onset_lag_evidence() - a different phenomenon from
+  # 12C's two_wave dip, a delay before 13C6's SINGLE wave starts at all),
+  # refit F_13C6/k_release plus a new t_lag1_13C6, with ka/kel FIXED at the
+  # joint fit's values above - never touches 12C's own reported parameters,
+  # mirroring how fit_subject_visit_two_wave()'s stage 2 fixes ka/kel
+  # before fitting 13C6's own extras. Compared via AIC on 13C6's own RSS
+  # (K=2 without vs K=3 with, computed inline since the shared aic() helper
+  # below isn't defined yet at the point this function is actually called)
+  # so it's only used when it earns its keep. See "13C6's capsule release
+  # has no genuine onset lag" in docs/pk-model.md - validated standalone on
+  # ER25 FCT1 (R2 0.71->0.94) and ER06 FCT2 (R2 0.64->0.95).
+  t_lag1_13C6 <- NA_real_
+  if (has_onset_lag_evidence(curve_13C6$times, curve_13C6$conc)) {
+    obj_13C6_lag <- function(theta) {
+      simB <- function(t, dose) simulate_delayed_release(t, theta[["k_release"]], par[["ka"]], par[["kel"]], theta[["F_13C6"]], dose, Vd)$conc
+      pred <- tryCatch(simulate_two_lag_dose(simB, curve_13C6$times, dose_13C6_mg, f_delayed = 0, t_lag1 = theta[["t_lag1_13C6"]], gap = 0), error = function(e) NULL)
+      if (is.null(pred) || any(!is.finite(pred))) return(1e10)
+      sum((pred - curve_13C6$conc)^2)
+    }
+    seeds_lag <- lapply(c(10, 20, 30, 40, 50), function(tl) c(F_13C6 = par[["F_13C6"]], k_release = 0.3, t_lag1_13C6 = tl))
+    lower_lag <- c(F_13C6 = BOUNDS_JOINT$F_13C6[1], k_release = BOUNDS_JOINT$k_release[1], t_lag1_13C6 = 0)
+    upper_lag <- c(F_13C6 = BOUNDS_JOINT$F_13C6[2], k_release = BOUNDS_JOINT$k_release[2], t_lag1_13C6 = 90)
+    fit_lag <- fit_multistart(obj_13C6_lag, lower_lag, upper_lag, seeds = seeds_lag, control = list(maxit = 60))
+    if (!is.null(fit_lag)) {
+      n13 <- length(curve_13C6$conc)
+      rss_no_lag <- sum((curve_13C6$conc - pred13)^2)
+      rss_lag <- fit_lag$value
+      aic_no_lag <- n13 * log(rss_no_lag / n13) + 2 * 2
+      aic_lag    <- n13 * log(rss_lag    / n13) + 2 * 3
+      if (aic_lag < aic_no_lag) {
+        par[["F_13C6"]] <- fit_lag$par[["F_13C6"]]
+        par[["k_release"]] <- fit_lag$par[["k_release"]]
+        t_lag1_13C6 <- fit_lag$par[["t_lag1_13C6"]]
+        simB_final <- function(t, dose) simulate_delayed_release(t, par[["k_release"]], par[["ka"]], par[["kel"]], par[["F_13C6"]], dose, Vd)$conc
+        pred13 <- simulate_two_lag_dose(simB_final, curve_13C6$times, dose_13C6_mg, f_delayed = 0, t_lag1 = t_lag1_13C6, gap = 0)
+        r2_13C6 <- r_squared(curve_13C6$conc, pred13)
+      }
+    }
+  }
+
   tibble(
     ka = par[["ka"]], kel = par[["kel"]], F_12C = par[["F_12C"]], F_13C6 = par[["F_13C6"]],
-    k_release = par[["k_release"]],
+    k_release = par[["k_release"]], t_lag1_13C6 = t_lag1_13C6,
     r2_12C  = r2_12C,
     r2_13C6 = r2_13C6,
     kel_at_bound = kel > (BOUNDS_JOINT$kel[2] - 1e-4),
@@ -766,13 +807,17 @@ for (col in c("ka", "kel", "F_12C", "F_13C6", "k_release", "r2_12C", "r2_13C6",
 results$f_delayed <- if_else(results$model == "two_wave", results$f_delayed, NA_real_)
 results$t_lag      <- if_else(results$model == "two_wave", results$t_lag, NA_real_)
 results$f_delayed_13C6 <- if_else(results$model == "two_wave", results$f_delayed_13C6, NA_real_)
+# t_lag1_13C6 is the mirror image - it only exists in single_wave_results
+# (not yet wired into two_wave's own 13C6 stage), so mask it out when
+# two_wave wins instead.
+results$t_lag1_13C6 <- if_else(results$model == "single_wave", results$t_lag1_13C6, NA_real_)
 # t30_present (kept from single_wave's own copy via the join above, since
 # that model is always attempted regardless of whether two_wave was skipped)
 # is a property of the data, not of which model won - ka is poorly anchored
 # without it even under single_wave; downstream reliability filtering should
 # take this into account alongside r2/converged/bound flags.
 results <- results %>% select(subject_id, visit, model, ka, kel, F_12C, F_13C6, k_release,
-                               f_delayed, t_lag, f_delayed_13C6, capsule_dissolution_halflife_min, t30_present,
+                               f_delayed, t_lag, f_delayed_13C6, t_lag1_13C6, capsule_dissolution_halflife_min, t30_present,
                                r2_12C, r2_13C6, kel_at_bound, k_release_at_bound, converged,
                                r2_12C_low, r2_13C6_low, aic_single_wave, aic_two_wave)
 
