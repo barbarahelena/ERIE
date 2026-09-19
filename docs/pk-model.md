@@ -243,20 +243,79 @@ both waves in the same proportion as the much larger liquid 12C dose; it's
 biologically plausible the capsule emptied entirely in one wave or the
 other.
 
+**Fixed:** `MIN_TMAX` now checks each wave's OWN peak (`tmax_wave1`,
+`tmax_wave2`, computed directly by simulating each wave alone rather than
+only the combined curve `simulate_lagged_dose()` returns), not just the
+combined curve's single global maximum. The old combined-only check
+(`tmax12 <- FINE_T[which.max(fine12)]`) only ever constrained whichever
+wave happened to be taller, leaving the other one's timing completely
+unconstrained - confirmed on real fitted results before this fix: `ER09`
+FCT1/FCT2 (wave 1 taller - combined peak at t=38/33 - but wave 2 ALONE
+peaked at t=151/147, never checked) and `ER16` FCT2 (wave 2 alone peaked at
+t=162). This addresses the *lower* floor (a wave's peak landing
+implausibly early); it does not add any *upper* constraint on how late a
+wave's peak can land beyond `t_lag`'s own 150min cap plus however long
+`ka`/`kel` take to rise from there - whether that's also needed is a
+separate, still-open question (see below).
+
 **Known limitation, not yet addressed (TODO):**
-- **`MIN_TMAX` only checks the combined curve's single global maximum, not
-  each wave's own peak.** In the two-wave objective, `tmax12 <-
-  FINE_T[which.max(fine12)]` finds the timing of the *tallest* point on the
-  summed (wave 1 + wave 2) curve and checks only that against the 30-minute
-  floor. When wave 2 ends up taller than wave 1 (common in fitted results,
-  e.g. `ER01`, `ER09`) wave 1's own peak is left completely unconstrained -
-  it could land at an implausibly early, data-unsupported time without
-  triggering any penalty, exactly the degenerate-early-peak failure mode
-  `MIN_TMAX` was built to prevent in the first place, just now hiding in the
-  first wave instead of the model's one peak. Needs the `MIN_TMAX` check
-  applied to each wave's own local peak, not just the combined global max -
-  and needs an empirical check first (has any fitted subject's wave 1
-  actually landed early?) before deciding how to fix it.
+- **The multistart search can miss a substantially better nearby optimum
+  when `ka` and `kel` are close to each other** (a known hard region for
+  one-compartment models - "flip-flop" kinetics, where `bateman_conc`'s
+  `ka/(ka-kel)` term makes the objective surface narrow/awkward for
+  gradient-based search, and generic seeds don't reliably land near it).
+  Confirmed concretely on `ER06` FCT2 (`single_wave`): the pipeline reports
+  `ka`=0.016, `kel`=0.051, R2=0.945 (neither at a bound), but a direct,
+  independently-verified check (multiple `optim()` starts, all converging
+  cleanly to the same point) found `ka`=0.023, `kel`=0.025, R2=0.986 -
+  clearly better, not noise. This isn't specific to `two_wave` or the
+  gates discussed above - it's in the base `fit_curve_independent()`/joint
+  multistart machinery every fit in the cohort depends on, so other
+  subjects' reported "best" fits may also be suboptimal local optima, not
+  true optima, which could ripple into R2-dependent decisions (the
+  R2_SINGLE_WAVE_SKIP_TWO_WAVE gate, AIC comparisons). Needs investigating
+  before trusting cohort-wide R2 values at face value - possible fixes
+  include a denser seed grid specifically along the ka=kel diagonal, or
+  reparameterizing to avoid the `ka/(ka-kel)` singularity directly.
+  Deliberately not fixed yet - the post-peak-dip/two_wave gate work in
+  progress should be finished first, then return to this as its own,
+  separate investigation.
+- **No upper constraint on how late a wave's own peak can land**, beyond
+  `t_lag`'s 150min hard cap - a slow `ka` can still push a wave's actual
+  peak well past `t_lag` itself (e.g. `ER16` FCT2's wave 2 above, `t_lag` =
+  111min but its own peak at t=162min). t=162 itself still falls inside the
+  densely-sampled (30min-spaced) 0-180min window, so it's not clearly
+  unsupported the way a peak inside the 180-240/240-360min gaps would be -
+  worth revisiting if a fitted wave's peak is ever found landing inside one
+  of those wider gaps specifically, rather than adding a blanket upper
+  bound pre-emptively.
+- **13C6's capsule release (`k_release` in `simulate_delayed_release()`) has
+  no genuine onset lag, only smooth first-order dissolution starting at
+  t=0 (fastest right at t=0, when the capsule reservoir is fullest).** It
+  cannot represent a curve whose 13C6 signal is genuinely near-zero for the
+  first ~30min and then rises sharply - the optimizer is forced to
+  compromise, letting some release happen early (overshooting the real
+  early timepoints) to still reach the observed later peak. Confirmed on
+  two subjects with an otherwise good `single_wave` fit: `ER25` FCT1
+  (fitted curve predicts 0.114 mg/L at t=30 vs. an observed 0.035 - the
+  real curve doesn't reach that concentration until well after) and `ER06`
+  FCT2 (predicts 0.109 at t=30 vs. an observed 0.004 - about a 26x
+  overshoot), while both fit the later peak reasonably. This is
+  independent of whether 12C shows a second gastric-emptying wave at all -
+  both of these subjects' 12C curves are perfectly smooth single peaks, so
+  `two_wave` (and 13C6's `f_delayed_13C6`) was correctly never attempted
+  for them; 13C6's own onset-delay need has nothing to do with 12C's shape.
+  Proposed approach (discussed, not yet built): reuse the already-validated
+  `simulate_lagged_dose()` wrapped around `simulate_delayed_release()` -
+  not the separate, previously-abandoned `simulate_two_lag_dose()` - as its
+  own feature independent of 12C's wave choice, gated by direct evidence in
+  13C6's own raw data (analogous to `has_peak_dip_rise()` for 12C) rather
+  than left to AIC/R² alone. 13C6 is already the noisier curve with only
+  8-9 sparse points (22/68 curves below the 0.70 reliability threshold);
+  adding another free parameter to fit its signal without a raw-data gate
+  risks exactly the "making stuff up" failure mode already guarded against
+  for 12C's two-wave model, with no second curve's worth of independent
+  evidence to cross-check it against.
 
 **Tested but deliberately not adopted (yet):**
 - **A two-lag onset-time extension** (`simulate_two_lag_dose()`, also in

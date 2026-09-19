@@ -37,59 +37,86 @@ time_to_clearance <- function(fine_time, fine_conc, frac = 0.01) {
   post_time[hit]
 }
 
-#' Whether a curve's own raw observations show a post-peak dip followed by a
-#' meaningful rise
+#' Whether a curve's own raw observations show a post-peak deviation from a
+#' smooth decline - a plateau, wobble, or outright second rise
 #'
 #' A simple, threshold-free check (no curve fitting involved) for whether
 #' the data itself gives any direct evidence of a genuine second wave,
 #' meant to gate a more complex model BEFORE it's even attempted - fitting
 #' first and relying on AIC/R^2 to notice afterward that there was nothing
 #' to explain lets a flexible model "explain" ordinary sampling noise around
-#' a ordinary single peak, not just a genuine second one.
+#' an ordinary single peak, not just a genuine second one.
+#'
+#' The test is NOT "does some later point exceed some earlier local
+#' minimum" - that misses a plateau or slowed decline that never actually
+#' rises above what came immediately before it, but is still real evidence
+#' of extra absorption countering ongoing elimination at that moment. A
+#' genuine single-exponential elimination phase is convex (decays ever more
+#' slowly, never abruptly), so any real point on it always sits AT OR BELOW
+#' the straight line connecting its two neighbors - that's what convexity
+#' means. A point sitting MEASURABLY ABOVE that interpolated line is
+#' therefore inherent evidence of non-monotonic-decay behavior, whether or
+#' not it becomes an outright new local maximum - so every point after the
+#' first peak is checked against its own neighbors' interpolation, not just
+#' compared to the single deepest trough.
 #'
 #' @param times,conc Numeric vectors of equal length, one curve's own
 #'   observed sampling times and concentrations (not necessarily sorted).
-#' @param min_rise_frac After the post-peak trough, require a subsequent
-#'   rise of at least this fraction of the curve's own overall peak
-#'   concentration (default 0.15, i.e. 15%) before counting it as a genuine
-#'   second wave rather than noise around a flat decline.
+#' @param min_rise_frac A point counts as evidence of a second wave if it
+#'   sits at least this fraction ABOVE the value linearly interpolated
+#'   (in time) between its immediate neighbors (default 0.15, i.e. 15%).
 #' @param min_first_peak_frac The candidate "first wave" peak itself must be
 #'   at least this fraction of the curve's own overall peak (default 0.5) -
 #'   otherwise a tiny early wobble while concentration is still low and
 #'   genuinely on its way up to the real peak (ordinary sampling noise)
 #'   would get mistaken for a first wave.
-#' @return TRUE if a first peak, a later local trough, and a later rise of
-#'   at least `min_rise_frac * overall peak` all exist in that order; FALSE
-#'   otherwise.
-has_peak_dip_rise <- function(times, conc, min_rise_frac = 0.15, min_first_peak_frac = 0.5) {
+#' @return A list with `detected` (TRUE if, after a first peak, any later
+#'   point sits at least `min_rise_frac` above its neighbors' linear
+#'   interpolation) and `trigger_time` (the time of the FIRST point that
+#'   triggered it, or NA if `detected` is FALSE) - when multiple points
+#'   deviate from a smooth decline (multiple humps/wobbles), this is the
+#'   one with the LARGEST deviation, not just the first one found, since
+#'   that's the strongest single piece of evidence and the most useful
+#'   point to anchor a second-wave model's search on. The trigger time is
+#'   useful for seeding that model's search near the real evidence rather
+#'   than leaving it to find an unrelated local optimum (see
+#'   fit_subject_visit_two_wave() in 02_fit_erie_model.R).
+peak_dip_rise_info <- function(times, conc, min_rise_frac = 0.15, min_first_peak_frac = 0.5) {
+  none <- list(detected = FALSE, trigger_time = NA_real_)
   ord <- order(times)
   t <- times[ord]; c <- conc[ord]
   n <- length(c)
-  if (n < 4) return(FALSE)
+  if (n < 4) return(none)
   overall_peak <- max(c)
 
   # The first "wave 1" candidate: the first point after which concentration
   # turns down, that's still a substantial fraction of the curve's overall
-  # peak. Deliberately NOT anchored on the curve's global max (unlike an
-  # earlier version of this function) - a genuine second wave is often
-  # TALLER than the first (see docs/pk-model.md, e.g. ER01/ER09), so
-  # requiring the trough to come after the tallest point structurally
-  # misses exactly that case (there's nothing left to rise back up to).
+  # peak. Deliberately NOT anchored on the curve's global max - a genuine
+  # second wave is often TALLER than the first (see docs/pk-model.md, e.g.
+  # ER01/ER09), so requiring evidence to come after the tallest point would
+  # structurally miss exactly that case.
   candidates <- which(diff(c) < 0 & c[-n] >= min_first_peak_frac * overall_peak)
-  if (length(candidates) == 0) return(FALSE)
+  if (length(candidates) == 0) return(none)
   peak_idx <- candidates[1]
-  if (peak_idx >= n - 1) return(FALSE)   # need a trough AND a later rise point after the peak
+  # Require at least one point of separation between the first peak and any
+  # candidate second peak - the point immediately after the peak (i =
+  # peak_idx+1) is still describing the first wave's own decline shape
+  # (how sharply it turns over), not a genuinely separate second wave.
+  if (peak_idx >= n - 2) return(none)
 
-  # The first LOCAL trough after that peak - the first point after which
-  # concentration starts rising again - not the post-peak segment's global
-  # minimum, which on any normal declining curve is almost always its very
-  # last (most-decayed) point, not the dip actually being looked for.
-  post_peak <- c[(peak_idx + 1):n]
-  m <- length(post_peak)
-  falls <- diff(post_peak) < 0
-  trough_rel <- which(!falls)[1]
-  if (is.na(trough_rel) || trough_rel >= m) return(FALSE)
-  trough_val <- post_peak[trough_rel]
-  after_trough <- post_peak[(trough_rel + 1):m]
-  (max(after_trough) - trough_val) >= min_rise_frac * overall_peak
+  best_excess <- -Inf
+  best_time <- NA_real_
+  for (i in (peak_idx + 2):(n - 1)) {
+    interp <- c[i - 1] + (c[i + 1] - c[i - 1]) * (t[i] - t[i - 1]) / (t[i + 1] - t[i - 1])
+    if (!is.finite(interp) || interp <= 0) next
+    excess <- (c[i] - interp) / interp
+    if (excess > best_excess) { best_excess <- excess; best_time <- t[i] }
+  }
+  if (best_excess >= min_rise_frac) return(list(detected = TRUE, trigger_time = best_time))
+  none
+}
+
+#' Boolean-only wrapper around [peak_dip_rise_info()] - see there for details.
+has_peak_dip_rise <- function(times, conc, min_rise_frac = 0.15, min_first_peak_frac = 0.5) {
+  peak_dip_rise_info(times, conc, min_rise_frac, min_first_peak_frac)$detected
 }

@@ -100,8 +100,6 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
 ISOTOPE_COLORS <- c("12C" = "steelblue", "13C6" = "firebrick")
 VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
-DIET_LABELS    <- c(low_fructose = "Diet A: low fructose", high_fructose = "Diet B: high fructose")
-DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
 
 # Config
 MIN_TMAX    <- 30     # min - soft floor on predicted Tmax for both curves - see file header
@@ -110,11 +108,16 @@ CMAX_LAMBDA <- 20     # penalty weight for the Cmax band
 TMAX_LAMBDA <- 50     # penalty weight for the Tmax floor
 # t_lag's effective lower bound (see BOUNDS_LAGGED comment below) depends on
 # that subject's OWN observed 12C concentration at t=30: fully permissive
-# (5) when it's already close to 0 (a genuine early delay is plausible),
-# fully restricted (30) once it's substantial (no data supports a delay that
-# early), linearly interpolated in between rather than a hard step.
+# (5) when it's at or below this threshold (a genuine early delay is
+# plausible - and exactly where within the unsampled 0-30min window can't
+# be pinned down from data anyway, so no finer-grained floor is used), else
+# fully restricted (30) - a STEP, not a linear interpolation: every value
+# strictly between 5 and 30 sits in that same unsampled gap regardless of
+# how far above this threshold t=30 is, so a "partial" floor is just as
+# unsupported as no floor at all (found on ER04 FCT1: t=30=51.4mg/L, only
+# moderately above this threshold, still produced an unjustified
+# flat-then-rise artifact under the old interpolated version).
 EARLY_LAG_OK_MGL  <- 5    # t=30 at or below this: early t_lag (as low as 5) is fine
-EARLY_LAG_BAD_MGL <- 75   # t=30 at or above this: t_lag must be >= 30
 # kel: Hannou et al. 2018 (t1/2 ~ 7-140 min). ka: bounded only below in
 # spirit (absorption-rate differences are part of the research question).
 BOUNDS_INDEP <- list(ka = c(1e-4, 1), kel = c(0.005, 0.1), F = c(1e-4, 1))
@@ -172,9 +175,8 @@ BOUNDS_LAGGED <- list(ka = c(1e-4, 1), kel = c(0.005, 0.1),
 # adaptive_retry() driver operates over (bound_cols/par_cols); the actual
 # two-stage fit below (fit_subject_visit_lagged()) uses these two subsets.
 # t_lag's lower bound here (5) is the permissive floor - the bound actually
-# passed to fit_multistart() in fit_subject_visit_two_wave() is raised per
-# subject toward 30 as that subject's own t=30 concentration gets larger
-# (see EARLY_LAG_OK_MGL/EARLY_LAG_BAD_MGL above).
+# passed to fit_multistart() in fit_subject_visit_two_wave() jumps to 30 for
+# any subject whose own t=30 concentration is above EARLY_LAG_OK_MGL above.
 BOUNDS_LAGGED_12C <- list(ka = c(1e-4, 1), kel = c(0.005, 0.1), F_12C = c(1e-4, 1),
                           f_delayed = c(0.001, 0.999), t_lag = c(5, 150))
 BOUNDS_13C6_GIVEN_LAG <- list(F_13C6 = c(1e-4, 1), k_release = c(0.001, 1),
@@ -250,9 +252,20 @@ fit_curve_independent <- function(obs_time, obs_conc, dose, Vd) {
                                       cmax_lambda = CMAX_LAMBDA, tmax_lambda = TMAX_LAMBDA,
                                       proportional_weighting = FALSE)
 
+  # ka=kel diagonal seeds: bateman_conc's ka/(ka-kel) term makes the
+  # objective surface narrow/awkward right where ka and kel are close
+  # ("flip-flop" kinetics, a known hard region for one-compartment models) -
+  # confirmed concretely on ER06 FCT2, where the production search reported
+  # ka=0.016/kel=0.051 (R2=0.945) but the true nearby optimum is ka=0.023/
+  # kel=0.025 (R2=0.986, verified from multiple starts). Generic random/grid
+  # seeds don't reliably land close enough to this region for L-BFGS-B to
+  # find it, so it's seeded explicitly here.
+  diagonal_seeds <- lapply(c(0.008, 0.012, 0.016, 0.02, 0.025, 0.03, 0.04, 0.05, 0.07),
+                            function(v) c(ka = v, kel = v, F = 0.03))
   seeds <- c(
     list(c(ka = 0.03, kel = 0.02, F = 0.3), c(ka = 0.08, kel = 0.05, F = 0.15),
          c(ka = 0.01, kel = 0.01, F = 0.5), c(ka = 0.05, kel = 0.08, F = 0.2)),
+    diagonal_seeds,
     random_seeds(N_RANDOM_INDEP, BOUNDS_INDEP, log_scale = c("ka", "kel"))
   )
   fit_multistart(objective,
@@ -311,12 +324,17 @@ fit_subject_visit_single_wave <- function(sid, vis, extra_seeds = list(), maxit 
     grid  = list(ka = c(0.02, 0.08), kel = c(0.01, 0.03, 0.06, 0.09)),
     fixed = list(F_12C = 0.1, F_13C6 = 0.1, k_release = 0.05)
   )
+  # ka=kel diagonal seeds - see the comment in fit_curve_independent() for
+  # why this region needs explicit seeding (verified on ER06 FCT2: the true
+  # nearby optimum, ka=0.023/kel=0.025, was missed by the seeds below alone).
+  diagonal_seeds_joint <- lapply(c(0.008, 0.012, 0.016, 0.02, 0.025, 0.03, 0.04, 0.05, 0.07),
+                                  function(v) c(ka = v, kel = v, F_12C = 0.03, F_13C6 = 0.03, k_release = 0.05))
   jitter_seeds <- random_seeds(N_RANDOM_JOINT, BOUNDS_JOINT, log_scale = c("ka", "kel", "k_release"))
 
   lower <- vapply(BOUNDS_JOINT, `[`, numeric(1), 1)
   upper <- vapply(BOUNDS_JOINT, `[`, numeric(1), 2)
   fit <- fit_multistart(objective, lower, upper,
-                         seeds = c(informed_seeds, grid_seeds_joint, jitter_seeds, extra_seeds),
+                         seeds = c(informed_seeds, grid_seeds_joint, diagonal_seeds_joint, jitter_seeds, extra_seeds),
                          control = list(maxit = maxit))
   if (is.null(fit)) return(empty)
 
@@ -401,16 +419,24 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
   # 240 all missing - only 5 real points for 12C).
   if (!any(obs12$time_min == 30)) return(mutate(empty, t30_present = FALSE))
   # Require actual evidence of a second wave in 12C's own raw observations -
-  # a post-peak local trough followed by a rise of >=15% of that curve's own
-  # peak (has_peak_dip_rise(), the same threshold-free check used to
-  # characterize dip prevalence across the cohort - see "The post-peak dip
-  # and the lagged-dose model" in docs/pk-model.md). Without this, two_wave
-  # would be tried on every curve regardless of shape, leaving AIC/R2 to
-  # notice only after the fact that there was nothing to explain - the same
-  # "making stuff up" failure R2_SINGLE_WAVE_SKIP_TWO_WAVE guards against
-  # below, just checked directly against the data one step earlier instead
-  # of indirectly through single_wave's fit quality.
-  if (!has_peak_dip_rise(obs12$time_min, obs12$conc_mgL)) return(mutate(empty, t30_present = TRUE))
+  # a post-peak deviation from a smooth decline, >=15% above what linear
+  # interpolation between neighbors predicts (peak_dip_rise_info(), the same
+  # threshold-free check used to characterize dip prevalence across the
+  # cohort - see "The post-peak dip and the lagged-dose model" in
+  # docs/pk-model.md). Without this, two_wave would be tried on every curve
+  # regardless of shape, leaving AIC/R2 to notice only after the fact that
+  # there was nothing to explain - the same "making stuff up" failure
+  # R2_SINGLE_WAVE_SKIP_TWO_WAVE guards against below, just checked directly
+  # against the data one step earlier instead of indirectly through
+  # single_wave's fit quality. dip_evidence$trigger_time (the timing of the
+  # point that actually justified trying two_wave) is kept and used to seed
+  # the search below - found on ER04 FCT1 that passing this gate does NOT
+  # guarantee the optimizer's generic seeds find a fit anywhere near that
+  # evidence: it landed on an unrelated, spuriously-slightly-better-AIC
+  # local optimum (t_lag=21.6, an early near-total-delay trick) instead of
+  # the genuine t=150 plateau that triggered the gate in the first place.
+  dip_evidence <- peak_dip_rise_info(obs12$time_min, obs12$conc_mgL)
+  if (!dip_evidence$detected) return(mutate(empty, t30_present = TRUE))
 
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
   Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
@@ -430,7 +456,24 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
     total <- total + TMAX_LAMBDA * max(0, MIN_TMAX - tmax12)^2
     obs_cmax12 <- max(obs12$conc_mgL)
     excess12 <- max(0, abs(max(fine12) - obs_cmax12) / obs_cmax12 - CMAX_TOL)
-    total + CMAX_LAMBDA * excess12^2
+    total <- total + CMAX_LAMBDA * excess12^2
+
+    # Each wave's OWN peak must also clear MIN_TMAX, not just the combined
+    # curve's tallest point above - the combined check alone only ever
+    # constrains whichever wave happens to be taller, leaving the other
+    # one's timing completely free. Confirmed on real fitted results: ER09
+    # FCT1/FCT2 (wave 1 taller - combined peak at t=38/33, but wave 2 ALONE
+    # peaks at t=151/147, never checked) and ER16 FCT2 (wave 2 alone peaks
+    # at t=162). Computed directly (not via simulate_lagged_dose, which
+    # only returns the summed curve) so each wave's own peak can be
+    # checked independently.
+    fine_wave1 <- simA(FINE_T, (1 - theta[["f_delayed"]]) * dose_12C)
+    fine_wave2 <- simA(pmax(FINE_T - theta[["t_lag"]], 0), theta[["f_delayed"]] * dose_12C)
+    if (any(!is.finite(fine_wave1)) || any(!is.finite(fine_wave2))) return(1e10)
+    tmax_wave1 <- FINE_T[which.max(fine_wave1)]
+    tmax_wave2 <- FINE_T[which.max(fine_wave2)]
+    total <- total + TMAX_LAMBDA * max(0, MIN_TMAX - tmax_wave1)^2
+    total + TMAX_LAMBDA * max(0, MIN_TMAX - tmax_wave2)^2
   }
 
   pre12 <- fit_curve_independent(obs12$time_min, obs12$conc_mgL, dose_12C, Vd)
@@ -447,21 +490,55 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
     c(ka = 0.06, kel = 0.03, F_12C = 0.015, f_delayed = 0.35, t_lag = 75),
     c(ka = 0.04, kel = 0.025, F_12C = 0.02, f_delayed = 0.45, t_lag = 90)
   )
+  # Seeds anchored on the ACTUAL evidence that justified trying two_wave at
+  # all (dip_evidence$trigger_time, from peak_dip_rise_info() above) - the
+  # generic seeds above have no reason to explore near where the real
+  # evidence is, and the optimizer can land on an unrelated, spuriously-
+  # better-AIC local optimum instead. Found on ER04 FCT1: without these,
+  # the search converged to t_lag=21.6 (an early near-total-delay trick),
+  # completely missing the genuine t=150 plateau that triggered this fit
+  # being attempted in the first place. Seeded at and somewhat before the
+  # trigger time, since the trigger point is where the second wave's
+  # contribution becomes visibly evident, not necessarily exactly when it
+  # started.
+  evidence_seeds <- if (!is.na(dip_evidence$trigger_time)) {
+    tt <- dip_evidence$trigger_time
+    list(
+      c(ka = 0.03, kel = 0.02, F_12C = 0.02, f_delayed = 0.4, t_lag = tt),
+      c(ka = 0.04, kel = 0.025, F_12C = 0.02, f_delayed = 0.3, t_lag = max(5, tt - 20)),
+      c(ka = 0.05, kel = 0.03, F_12C = 0.015, f_delayed = 0.35, t_lag = max(5, tt - 40))
+    )
+  } else list()
+  # ka=kel diagonal seeds - see the comment in fit_curve_independent() for
+  # why this region needs explicit seeding.
+  diagonal_seeds_12C <- lapply(c(0.008, 0.012, 0.016, 0.02, 0.025, 0.03, 0.04, 0.05, 0.07), function(v) {
+    c(ka = v, kel = v, F_12C = 0.02, f_delayed = 0.3, t_lag = 60)
+  })
   jitter_seeds_12C <- random_seeds(N_RANDOM_LAGGED, BOUNDS_LAGGED_12C, log_scale = c("ka", "kel"))
   # extra_seeds (from the retry driver) carry all 7 combined-model parameter
   # names - only the stage-1-relevant subset is used here.
   extra_seeds_12C <- lapply(extra_seeds, function(s) s[c("ka", "kel", "F_12C", "f_delayed", "t_lag")])
-  seeds_12C <- c(informed_seed_12C, no_lag_seeds, dip_seeds, jitter_seeds_12C, extra_seeds_12C)
+  seeds_12C <- c(informed_seed_12C, no_lag_seeds, dip_seeds, evidence_seeds, diagonal_seeds_12C, jitter_seeds_12C, extra_seeds_12C)
 
-  # t_lag's actual lower bound for THIS subject: 5 if their own t=30 sample
-  # is already <= EARLY_LAG_OK_MGL (a genuine early delay is plausible), up
-  # to 30 once it's >= EARLY_LAG_BAD_MGL (no data supports a delay that
-  # early - see EARLY_LAG_OK_MGL/EARLY_LAG_BAD_MGL and the BOUNDS_LAGGED
-  # comment above for the ER06 FCT2 case this fixes), linearly interpolated
-  # between the two.
+  # t_lag's actual lower bound for THIS subject: a STEP function of their
+  # own t=30 sample, not a linear interpolation (an earlier version of this
+  # bound interpolated between 5 and 30 min as t=30 rose from
+  # EARLY_LAG_OK_MGL to EARLY_LAG_BAD_MGL - wrong, because there is no
+  # sample ANYWHERE between t=0 and t=30, so every value strictly between 5
+  # and 30 sits in exactly the same unsampled gap regardless of how close
+  # t=30 is to either threshold. A "partial credit" floor is just as
+  # unsupported as the original flat 5min one - confirmed on ER04 FCT1:
+  # t=30 = 51.4 mg/L, only "moderately" elevated (not near
+  # EARLY_LAG_BAD_MGL), so the interpolated floor came out to 21.6min - and
+  # the fit landed EXACTLY there, reproducing the same unjustified
+  # flat-then-rise artifact the whole mechanism exists to prevent, just
+  # shifted from 5 to 21.6). Either t=30 is genuinely near zero (a delay
+  # somewhere in the unsampled window is plausible, and 5 is used as the
+  # permissive floor since exactly where within it can't be pinned down
+  # from data anyway), or it isn't - in which case NO point in that window
+  # is defensible, so the floor jumps straight to 30, not partway there.
   obs30_12C <- obs12$conc_mgL[obs12$time_min == 30]
-  frac_bad <- min(1, max(0, (obs30_12C - EARLY_LAG_OK_MGL) / (EARLY_LAG_BAD_MGL - EARLY_LAG_OK_MGL)))
-  t_lag_lower <- BOUNDS_LAGGED_12C$t_lag[1] + frac_bad * (30 - BOUNDS_LAGGED_12C$t_lag[1])
+  t_lag_lower <- if (obs30_12C <= EARLY_LAG_OK_MGL) BOUNDS_LAGGED_12C$t_lag[1] else 30
 
   lower12 <- vapply(BOUNDS_LAGGED_12C, `[`, numeric(1), 1)
   upper12 <- vapply(BOUNDS_LAGGED_12C, `[`, numeric(1), 2)
@@ -709,9 +786,12 @@ write_csv(results, "results/fit_results.csv")
 
 # Plots: one figure per subject, both isotopes x both visits, using each
 # subject x visit's SELECTED model (single_wave or two_wave, per
-# results$model above), colored by that subject's diet arm, against the
-# observed points (which include t=0, unlike the t>0-only data_fit used for
-# fitting).
+# results$model above), colored by isotope (12C/13C6 - no legend needed,
+# already labelled by the facet rows), against the observed points (which
+# include t=0, unlike the t>0-only data_fit used for fitting). Each panel is
+# annotated with that curve's own R2, and 12C's panel also gets both
+# candidate models' AIC (the value the model-selection choice above was
+# actually based on).
 simulate_fit <- function(sid, vis, r) {
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
   Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
@@ -743,19 +823,27 @@ plot_subject_fit <- function(sid) {
   fits <- results %>% filter(subject_id == sid, !is.na(ka))
   if (nrow(fits) == 0) return(NULL)
 
-  diet_val <- covariates %>% filter(subject_id == sid) %>% pull(diet) %>% first()
-
   sim <- fits %>% pmap_dfr(function(...) {
     row <- tibble(...)
-    bind_cols(visit = row$visit, diet = diet_val, simulate_fit(sid, row$visit, row))
+    bind_cols(visit = row$visit, simulate_fit(sid, row$visit, row))
   })
+
+  fmt_aic <- function(x) if_else(is.na(x), "NA", sprintf("%.0f", x))
+  ann <- bind_rows(
+    fits %>% transmute(visit, isotope = "12C",
+                        label = sprintf("R2=%.3f\nAIC sw/tw=%s/%s", r2_12C,
+                                        fmt_aic(aic_single_wave), fmt_aic(aic_two_wave))),
+    fits %>% transmute(visit, isotope = "13C6", label = sprintf("R2=%.3f", r2_13C6))
+  )
 
   ggplot(obs, aes(time_min, conc_mgL)) +
     geom_point(color = "black", size = 1.4) +
-    geom_line(data = sim, aes(color = diet), linewidth = 0.8) +
+    geom_line(data = sim, aes(color = isotope), linewidth = 0.8, show.legend = FALSE) +
+    geom_text(data = ann, aes(x = Inf, y = Inf, label = label), inherit.aes = FALSE,
+              hjust = 1.05, vjust = 1.2, size = 2.5, lineheight = 0.9) +
     facet_grid(rows = vars(isotope), cols = vars(visit), scales = "free",
                labeller = labeller(visit = VISIT_LABELS, isotope = ISOTOPE_LABELS)) +
-    scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+    scale_color_manual(values = ISOTOPE_COLORS) +
     labs(title = sid, x = "Time (min)", y = "Concentration (mg/L)") +
     theme_Publication()
 }
