@@ -232,10 +232,8 @@ cat("\nSaved results/diet_parameter_boxplot.pdf and results/diet_lmm_results.csv
 # values). Reported as a log fold-change (log(FCT2) - log(FCT1)), matching
 # the log-transformed LMMs above and for the same reason - these are
 # rate/fraction-like quantities better compared multiplicatively. Compared
-# between diet arms with Welch's t-test (ggpubr::stat_compare_means,
-# unequal variance, R's default) rather than a Wilcoxon rank-sum test - more
-# consistent with the LMMs above, which already assume log-normality on
-# this same scale, and n per arm (11-16) is reasonable for it.
+# between diet arms with a Wilcoxon rank-sum test (ggpubr::stat_compare_means)
+# rather than a t-test, since n per arm is small and not assumed normal.
 
 delta_param <- function(param) {
   fits %>% filter(reliable) %>%
@@ -256,7 +254,7 @@ p_delta <- ggplot(delta_data, aes(diet, delta, fill = diet)) +
   geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
   geom_jitter(aes(color = diet), width = 0.08, size = 1.2, alpha = 0.6, show.legend = FALSE) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
-  stat_compare_means(method = "t.test", label = "p.format", size = 3) +
+  stat_compare_means(method = "wilcox.test", label = "p.format", size = 3) +
   facet_wrap(vars(parameter), scales = "free_y", nrow = 2,
              labeller = labeller(parameter = PARAM_LABELS)) +
   scale_x_discrete(labels = DIET_LABELS) +
