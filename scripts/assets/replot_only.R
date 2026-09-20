@@ -51,7 +51,7 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
 ISOTOPE_COLORS <- c("12C" = "steelblue", "13C6" = "firebrick")
-VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
+VISIT_LABELS   <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
 CLEARANCE_FRAC <- 0.01
 
 concentrations <- read_csv("data/processed/erie_concentrations.csv", show_col_types = FALSE)

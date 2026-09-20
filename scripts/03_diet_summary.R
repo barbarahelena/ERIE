@@ -52,10 +52,10 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 
 # Plot labels: readable names and consistent colors.
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
-VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
+VISIT_LABELS   <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
 DIET_LABELS    <- c(low_fructose = "Low fructose diet", high_fructose = "High fructose diet")
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
-VISIT_COLORS   <- c(FCT1 = "#4477AA", FCT2 = "#CC6677")
+VISIT_COLORS   <- c(baseline = "#4477AA", intervention = "#CC6677")
 FINE_T_DIET <- seq(0, 400, by = 2)
 # Cutoff for inclusion in this script's plots/statistics - deliberately
 # separate from (and stricter than) 02_fit_erie_model.R's own
@@ -193,7 +193,7 @@ print(as.data.frame(param_table), digits = 3)
 # One LMM per parameter, testing whether diet arm, visit (before/after the
 # diet), or their interaction (the actual "did the diet change this
 # differently by arm" question) explains variation - subject_id as a random
-# intercept, since each subject contributes a paired FCT1/FCT2 observation
+# intercept, since each subject contributes a paired baseline/intervention observation
 # (repeated measures), not two independent ones. Uses the same reliability
 # filter as the descriptive summary above; lmer handles the resulting
 # unbalanced design (not every subject has both visits reliable) without
@@ -265,7 +265,7 @@ box_data <- bind_rows(
 # One PDF per parameter, faceted by diet arm and colored by visit
 # (VISIT_COLORS, matching diet_summary_curves_12C/13C6.pdf) rather than one
 # combined figure faceted by parameter and colored by diet - makes the
-# FCT1-vs-FCT2 comparison the primary visual read within each diet-arm
+# baseline-vs-intervention comparison the primary visual read within each diet-arm
 # panel, consistent with how the curve plots present it.
 plot_param_boxplot <- function(param_name) {
   d <- box_data %>% filter(parameter == param_name)
@@ -292,11 +292,11 @@ for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
 cat("Saved results/diet_lmm_results.csv\n")
 
 # ---- Delta plots: within-subject before/after diet change, by diet arm ----
-# The boxplot above compares FCT1 and FCT2 as separate distributions; the
+# The boxplot above compares baseline and intervention as separate distributions; the
 # actual "did the diet change this parameter" question is the per-subject
-# FCT2-vs-FCT1 change, only defined for subjects with BOTH visits reliable
+# intervention-vs-baseline change, only defined for subjects with BOTH visits reliable
 # (so every delta is a complete pair, not a mix of paired and unpaired
-# values). Reported as a log fold-change (log(FCT2) - log(FCT1)), matching
+# values). Reported as a log fold-change (log(intervention) - log(baseline)), matching
 # the log-transformed LMMs above and for the same reason - these are
 # rate/fraction-like quantities better compared multiplicatively. Compared
 # between diet arms with a Wilcoxon rank-sum test (ggpubr::stat_compare_means)
@@ -306,8 +306,8 @@ delta_param <- function(param) {
   fits %>% filter(reliable) %>%
     select(subject_id, diet, visit, value = all_of(param)) %>%
     pivot_wider(names_from = visit, values_from = value) %>%
-    filter(!is.na(FCT1), !is.na(FCT2)) %>%
-    transmute(subject_id, diet, parameter = param, delta = log(FCT2) - log(FCT1))
+    filter(!is.na(baseline), !is.na(intervention)) %>%
+    transmute(subject_id, diet, parameter = param, delta = log(intervention) - log(baseline))
 }
 
 delta_data <- bind_rows(
@@ -327,17 +327,17 @@ p_delta <- ggplot(delta_data, aes(diet, delta, fill = diet)) +
   scale_x_discrete(labels = DIET_LABELS) +
   scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
   scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-  labs(title = "Within-subject diet change (log fold-change, FCT2 vs FCT1) by diet arm",
-       x = NULL, y = "log(FCT2 / FCT1)") +
+  labs(title = "Within-subject diet change (log fold-change, intervention vs baseline) by diet arm",
+       x = NULL, y = "log(intervention / baseline)") +
   theme_Publication()
 
 ggsave("results/diet_parameter_delta_boxplot.pdf", p_delta, width = 11, height = 7, dpi = 150)
 cat("\nSaved results/diet_parameter_delta_boxplot.pdf and results/diet_parameter_deltas.csv\n")
 
-# ---- FCT1 vs FCT2 ("before/after") WITHIN each diet arm --------------------
+# ---- baseline vs intervention ("before/after") WITHIN each diet arm --------------------
 # A different question from the delta plot above (which compares the SIZE
-# of the FCT2-FCT1 change BETWEEN diet arms): this asks whether FCT1 and
-# FCT2 differ at all WITHIN each diet arm on its own. Computed as a paired
+# of the intervention-baseline change BETWEEN diet arms): this asks whether baseline and
+# intervention differ at all WITHIN each diet arm on its own. Computed as a paired
 # Wilcoxon signed-rank test - equivalent to a one-sample Wilcoxon test of
 # each subject's own delta (already computed above) against 0 - rather
 # than ggpubr's automatic pairing detection across facets, which silently
@@ -357,7 +357,7 @@ before_after_p <- box_data %>%
                 .groups = "drop"),
     by = c("parameter", "diet")
   ) %>%
-  mutate(group1 = "FCT1", group2 = "FCT2",
+  mutate(group1 = "baseline", group2 = "intervention",
          label = if_else(is.na(p), sprintf("n=%d", n_paired), sprintf("p=%.3f (n=%d)", p, n_paired)))
 
 write_csv(before_after_p, "results/diet_before_after_wilcoxon.csv")
@@ -376,7 +376,7 @@ plot_before_after <- function(param_name) {
     facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
     scale_x_discrete(labels = VISIT_LABELS) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
-    labs(title = sprintf("%s: FCT1 vs FCT2 within each diet arm (paired Wilcoxon)", PARAM_LABELS[[param_name]]),
+    labs(title = sprintf("%s: baseline vs intervention within each diet arm (paired Wilcoxon)", PARAM_LABELS[[param_name]]),
          x = NULL, y = NULL) +
     theme_Publication()
 }
@@ -498,7 +498,7 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
 }
 
 # Faceted by DIET ARM (not isotope x visit as an earlier version had it) so
-# FCT1 and FCT2 - the actual before/after-diet comparison - are overlaid
+# baseline and intervention - the actual before/after-diet comparison - are overlaid
 # together within the same panel, colored by visit, rather than split
 # across separate panel columns where comparing them means tracking a
 # same-colored line across two plots. One PDF per isotope, not a shared
@@ -508,7 +508,7 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
 # or needs free scales that make the two isotopes hard to present, compare,
 # or caption together as one figure anyway.
 plot_diet_curves <- function(isotope_val) {
-  curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("FCT1", "FCT2")) %>%
+  curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("baseline", "intervention")) %>%
     pmap_dfr(function(diet, visit) {
       ac <- average_curve_isotope(diet, visit, isotope_val)
       if (is.null(ac)) return(NULL)
@@ -522,7 +522,7 @@ plot_diet_curves <- function(isotope_val) {
     facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
     scale_color_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
-    labs(title = sprintf("Mean %s concentration: FCT1 vs FCT2 within each diet arm", ISOTOPE_LABELS[[isotope_val]]),
+    labs(title = sprintf("Mean %s concentration: baseline vs intervention within each diet arm", ISOTOPE_LABELS[[isotope_val]]),
          x = "Time (min)", y = "Concentration (mg/L)") +
     theme_Publication()
 }
