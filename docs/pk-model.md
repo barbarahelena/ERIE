@@ -674,15 +674,30 @@ under-searched.
 
 ## Fit quality and what to trust
 
-Reproducing this model against `former_models/`'s own validated results
-(see "Continuity with prior work") gives fit quality in the same range
-previously reported: most subjects land around R² ~0.9+ for the 12C curve
-and R² ~0.7-0.9 for the 13C6 curve, with a handful of known-hard subjects
-(noisy curves, e.g. an isolated early spike inconsistent with the rest of
-the curve) landing much lower on either curve. Per-subject R² is in
+The 12C curve fits well for most subjects (median R² ~0.85), but the 13C6
+curve does not: as of the current model (Nadler Vd, weighted objective,
+adaptive retry), **45/68 (66%) of 13C6 fits still fall below R² 0.70 after
+retry**, vs. 19/68 (28%) for 12C. This is a materially different picture
+from earlier versions of this model, which described only "a handful of
+known-hard subjects" - that language is no longer accurate and the
+`r2_13C6_low` rate should not be read as rare. Per-subject R² is in
 `results/fit_results_joint.csv` - always check it before trusting an
 individual subject's parameters, and inspect that subject's plot in
 `results/plots_individual/` if R² is low.
+
+The likely explanation is not that these fits are under-searched: the
+adaptive retry pass explicitly targets low-R² fits with a much denser
+search (see "Adaptive retry" above), and this run retried 58/68 subjects
+for exactly that reason. A weak, low-information 13C6 curve - e.g. from an
+especially slow/delayed capsule opening, where the curve's shape is
+dominated by `k_release` rather than `ka`/`kel` - can have a genuinely low
+achievable R² that no amount of extra search improves. The
+`retried`/`retry_improved` columns (added after this particular run;
+rerun to get them) make this directly checkable per subject: `retried =
+TRUE, retry_improved = FALSE` on a low-R² 13C6 fit is evidence for genuine
+curve weakness rather than a search failure. Until that's been checked
+across the cohort, treat the 66% figure as "13C6 fits are frequently hard
+to pin down precisely," not as "45 fits are wrong."
 
 `results/fit_results_joint.csv` also carries `r2_12C_low` / `r2_13C6_low`,
 TRUE when that curve's own R² falls below `R2_RELIABLE_MIN` (0.70, set in
@@ -691,9 +706,7 @@ on the subject×visit: a low flag on one curve does not by itself mean the
 other curve's R², or the `ka`/`kel` shared across both, are also
 unreliable - though because `ka`/`kel` are fit jointly, a poor fit on one
 curve can still bias them, so a low flag is a prompt to inspect that
-subject's plot, not just to drop the flagged curve's own parameter. With
-the current cohort this flags 9/68 fits on `r2_12C` and 22/68 on
-`r2_13C6`.
+subject's plot, not just to drop the flagged curve's own parameter.
 
 **Trustworthy as (approximately) absolute numbers:**
 - `kel`, `ka` - reasonably well-identified given the bounds and multi-start
@@ -715,6 +728,20 @@ the current cohort this flags 9/68 fits on `r2_12C` and 22/68 on
   a directly measured individual Vd), which this protocol does not include.
   Report `F` as conditional on the Nadler blood-volume Vd assumption, not
   as a precise absolute bioavailability.
+
+  **Sanity-checking the magnitude under the current Vd:** with Nadler
+  blood-volume Vd, median `F_12C` is ~3.2% and median `F_13C6` is ~3.0%
+  (range roughly 1-11% and 1-59% respectively; the 13C6 upper end is driven
+  by a handful of the same weak/hard-to-fit curves discussed above). These
+  are low - single-digit percent - and, unlike the earlier flat-ECFV
+  version of this model, haven't yet been checked against a literature
+  fructose/glucose bioavailability figure at a comparable dose. That
+  comparison is worth doing before these numbers go into anything
+  manuscript-facing: if literature values are substantially higher, that's
+  a signal Nadler blood volume specifically (as opposed to ECFV, or some
+  other Vd estimate) may be too small for fructose's actual distribution
+  volume, on top of the already-acknowledged mismatch with this model's own
+  prior physiological reasoning (see "Volume of distribution" above).
 - Any boundary-flagged parameter (`kel_at_bound` or `k_release_at_bound` =
   TRUE in the results table) - even after the adaptive retry above, the data
   may genuinely not constrain that parameter away from the bound (e.g.
