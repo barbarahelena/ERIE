@@ -217,15 +217,20 @@ fit_lmm <- function(param, log_transform = TRUE) {
   }
   model <- lmer(value ~ diet * visit + (1 | subject_id), data = d)
   a <- anova(model)  # Type III, Satterthwaite df (lmerTest default)
-  tibble(parameter = param, term = rownames(a), `F` = a$`F value`, df1 = a$NumDF, df2 = a$DenDF, p = a$`Pr(>F)`)
+  tibble(parameter = param, scale = if (log_transform) "log" else "raw",
+         term = rownames(a), `F` = a$`F value`, df1 = a$NumDF, df2 = a$DenDF, p = a$`Pr(>F)`)
 }
 
+# Both scales run and reported side by side - log (the default reasoning
+# above still applies: these are rate/fraction-like quantities better
+# treated as log-normal) and raw, so the two can be compared directly
+# rather than trusting the log-scale choice without a raw-scale check.
 lmm_results <- bind_rows(
-  fit_lmm("ka"),
-  fit_lmm("kel"),
-  fit_lmm("F_12C"),
-  fit_lmm("F_13C6")
-)
+  fit_lmm("ka"),                    fit_lmm("ka", log_transform = FALSE),
+  fit_lmm("kel"),                   fit_lmm("kel", log_transform = FALSE),
+  fit_lmm("F_12C"),                 fit_lmm("F_12C", log_transform = FALSE),
+  fit_lmm("F_13C6"),                fit_lmm("F_13C6", log_transform = FALSE)
+) %>% arrange(parameter, scale, term)
 
 write_csv(lmm_results, "results/diet_lmm_results.csv")
 cat("\n=== LMM (diet x visit, subject random intercept): F-tests ===\n")
