@@ -169,21 +169,50 @@ build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax
 #' @param seeds List of named numeric starting vectors (same names/order as
 #'   `lower`/`upper`).
 #' @param control List passed through to `optim()`. If it doesn't already
-#'   set `parscale`, defaults to `upper - lower` per parameter - L-BFGS-B's
-#'   internal step sizing assumes roughly unit-scaled parameters, and
-#'   fitted PK parameters routinely span very different magnitudes (e.g.
-#'   rate constants ~1e-4-1 alongside fractions 0-1) without it.
+#'   set `parscale`, one is computed PER START from that start's own
+#'   magnitude (see below) - L-BFGS-B's internal step sizing assumes
+#'   roughly unit-scaled parameters, and fitted PK parameters routinely
+#'   span very different magnitudes (e.g. rate constants ~1e-4-1 alongside
+#'   fractions 0-1) without it.
 #' @return The best `optim()` result (a list with `par`, `value`, ...), or
 #'   NULL if every start failed.
 fit_multistart <- function(objective_fn, lower, upper, seeds, control = list(maxit = 100)) {
-  if (is.null(control$parscale)) control$parscale <- upper - lower
+  bound_range <- upper - lower
 
   best <- NULL
   for (start in seeds) {
     start <- pmax(pmin(start, upper * 0.99), lower * 1.01)
+    start_control <- control
+    if (is.null(start_control$parscale)) {
+      # A single parscale = upper - lower (the previous default) is only a
+      # good proxy for a parameter's natural scale when its bounds are
+      # already tight around plausible values. Several bounds here are
+      # deliberately wide open (e.g. ka/F in [1e-4, 1], to not bias the
+      # research question) even though real fitted values sit around
+      # 0.01-0.05 - for those, upper-lower is ~20-100x too large, and
+      # L-BFGS-B's step sizing degrades badly enough to get stuck near the
+      # starting point instead of descending. Confirmed concretely on ER11
+      # FCT1 (two_wave): production's own objective (with its MIN_TMAX/CMAX
+      # penalties) scores the reported fit (t_lag=47.3) at 0.208, but a
+      # search using each start's OWN magnitude as parscale finds 0.188 at
+      # t_lag=120 - which lines up with the actual post-peak dip evidence
+      # (trigger_time=150) that justified attempting two_wave in the first
+      # place; the bound-width parscale (ka/F_12C parscale ~1, ~20-70x
+      # their ~0.015 starting values here) reproduces the same stuck
+      # behavior as no parscale at all (both converge to essentially the
+      # same worse point, obj ~0.26-0.28).
+      # Using the start's own magnitude fixes this: a multistart seed is
+      # already meant to be in the right neighborhood (informed by a
+      # pre-fit, evidence-anchored, or a systematic grid/diagonal), so its
+      # magnitude is a far better estimate of the LOCAL natural scale than
+      # the global bound width. Floored at 1% of the bound range so a
+      # near-zero starting value (e.g. f_delayed seeded at 0.001) doesn't
+      # collapse parscale toward zero.
+      start_control$parscale <- pmax(abs(start), 0.01 * bound_range)
+    }
     fit <- tryCatch(
       stats::optim(start, objective_fn, method = "L-BFGS-B",
-                   lower = lower, upper = upper, control = control),
+                   lower = lower, upper = upper, control = start_control),
       error = function(e) NULL
     )
     if (!is.null(fit) && is.finite(fit$value) && fit$value < 1e6 &&
