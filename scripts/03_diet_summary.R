@@ -1,5 +1,8 @@
 # Diet-arm summary plots
 # Barbara Verhaar
+#
+# Which fits are included, the statistics used and the plot choices are
+# explained in docs/diet-summary.md.
 
 # Libraries
 suppressMessages({
@@ -57,12 +60,9 @@ DIET_LABELS    <- c(low_fructose = "Low fructose diet", high_fructose = "High fr
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
 VISIT_COLORS   <- c(FCT1 = "#4477AA", FCT2 = "#CC6677")
 FINE_T_DIET <- seq(0, 400, by = 2)
-# Cutoff for inclusion in this script's plots/statistics - deliberately
-# separate from (and stricter than) 02_fit_erie_model.R's own
-# R2_RELIABLE_MIN (0.70), which just flags a fit for that pipeline's own
-# retry logic, not for whether it belongs in a diet-arm summary. 0.85 of
-# 68 cohort fits currently drops 5 (r2_12C in 0.79-0.84), none of them
-# otherwise kel-bound.
+# Inclusion cutoff for this script's plots/statistics - separate from, and
+# stricter than, 02_fit_erie_model.R's R2_RELIABLE_MIN (see "Which fits are
+# included" in docs/diet-summary.md).
 R2_INCLUDE_MIN <- 0.9
 
 # Open data
@@ -80,43 +80,16 @@ fits <- fits %>%
   mutate(
     Vd = nadler_blood_volume(bw_kg, height_cm, sex),
     dose_12C_mg = 1000 * bw_kg,
-    # Reliability gated on the 12C fit only: it isn't stuck at the shared
-    # kel bound, and its own R2 clears R2_INCLUDE_MIN. Applied uniformly to
-    # every parameter (including F_13C6/capsule dissolution) rather than
-    # additionally requiring 13C6's own R2/k_release bound to pass - 13C6's
-    # much smaller, noisier signal fails its own bar far more often even
-    # when the underlying shared kinetics (from the same joint fit) are
-    # trustworthy, which excluded a lot of otherwise-fine subjects. See
-    # "Fit quality and what to trust" in docs/pk-model.md.
-    #
-    # `converged` deliberately excluded: it only reflects whether optim()'s
-    # L-BFGS-B hit its strict internal stopping criterion vs. its maxit cap,
-    # not whether the winning fit is actually good - checked directly on
-    # this cohort's own fit_results.csv, r2_12C for converged=FALSE rows
-    # (mean 0.902, n=22) was statistically indistinguishable from, if
-    # anything slightly better than, converged=TRUE rows (mean 0.890,
-    # n=46), and its minimum (0.762) was far ABOVE the converged group's
-    # minimum (0.249, the known-hard subjects). Requiring it anyway was
-    # needlessly discarding good fits, especially here where a delta/
-    # two-wave comparison requires BOTH visits reliable simultaneously - a
-    # 32% per-curve "not converged" rate compounds to exclude the majority
-    # of subjects from any paired comparison even though the fits it drops
-    # are just as trustworthy by R2 as the ones it keeps.
+    # Reliable = 12C's fit isn't stuck at the shared kel bound and its R2 clears
+    # R2_INCLUDE_MIN, applied to every parameter. `converged` is deliberately
+    # not required. See "Which fits are included" in docs/diet-summary.md.
     reliable = !kel_at_bound & r2_12C >= R2_INCLUDE_MIN
   )
 
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
-# Vd isn't a fitted parameter - it's a direct, deterministic function of
-# each subject's own weight/height/sex via Nadler's equation (see "Volume
-# of distribution (Vd)" in docs/pk-model.md) - so it isn't gated on
-# `reliable` (a PK fit's own convergence/R2 has no bearing on it), and isn't
-# split by visit either: it's essentially fixed per subject (weight rarely
-# changes meaningfully within the study), so one value per subject
-# (averaged across whichever visits are present) compared across diet arms
-# is more useful than a visit-split view that just adds noise. Useful as a
-# covariate-balance check: it should cluster by sex (built into the
-# formula) and be reasonably similar between diet arms if randomization
-# worked as intended.
+# Vd is a deterministic function of weight/height/sex, not a fit result, so it
+# isn't gated on `reliable` and is shown once per subject (mean over visits) as
+# a covariate-balance check. See "Outputs" in docs/diet-summary.md.
 
 vd_data <- fits %>% group_by(subject_id, diet, sex) %>%
   summarise(Vd = mean(Vd), .groups = "drop")
@@ -134,11 +107,8 @@ ggsave("results/diet_vd_boxplot.pdf", p_vd, width = 6, height = 5, dpi = 150)
 cat("\nSaved results/diet_vd_boxplot.pdf\n")
 
 # ---- Fit quality (R2) by diet arm and visit --------------------------------
-# Deliberately NOT gated on `reliable` - reliable excludes on r2_12C_low,
-# which is DERIVED from r2_12C itself, so filtering by it here would hide
-# exactly the poor fits this plot exists to surface. A QC/diagnostic view of
-# fit quality across the whole cohort, not a trustworthy-subset comparison
-# like the parameter plots below.
+# Deliberately not gated on `reliable` (which filters on r2_12C itself): a
+# whole-cohort QC view. See "Outputs" in docs/diet-summary.md.
 R2_RELIABLE_MIN <- 0.70   # matches 02_fit_erie_model.R's own threshold
 
 r2_data <- bind_rows(
@@ -190,34 +160,12 @@ cat("=== Parameter summary by diet x visit (reliable fits only) ===\n")
 print(as.data.frame(param_table), digits = 3)
 
 # ---- Statistical comparison: diet x time linear mixed models --------------
-# One LMM per parameter, testing whether diet arm, visit (before/after the
-# diet), or their interaction (the actual "did the diet change this
-# differently by arm" question) explains variation - subject_id as a random
-# intercept, since each subject contributes a paired FCT1/FCT2 observation
-# (repeated measures), not two independent ones. Uses the same reliability
-# filter as the descriptive summary above; lmer handles the resulting
-# unbalanced design (not every subject has both visits reliable) without
-# needing complete pairs, unlike a paired t-test.
+# One LMM per parameter on reliable fits, with subject_id as a random
+# intercept for the paired FCT1/FCT2 observations. See "Linear mixed models" in
+# docs/diet-summary.md.
 
-# log_transform defaults TRUE: ka/kel/k_release-derived halflife are rate
-# constants and F_12C/F_13C6 are bioavailable fractions - all positive,
-# multiplicative-scale quantities standardly treated as log-normal in PK
-# work (not normal on their raw scale). Log-transforming makes the LMM's
-# normal-residuals assumption more defensible and turns a diet effect into
-# a fold-change rather than an absolute difference, which is the more
-# natural scale for a rate constant.
-#
-# Adjusted for sex as a fixed-effect covariate - plausibly affects
-# absorption/clearance/F independent of diet (sex is already built into Vd
-# itself via nadler_blood_volume(), but not into ka/kel/F, which are fit
-# independent of Vd), so including it here lets the diet/visit effect be
-# read net of that variation rather than having it inflate the
-# residual/subject-level noise the model would otherwise attribute to diet
-# or visit. (BMI tried too, dropped - not included here.)
-#
-# Log scale only - tried alongside the raw scale directly (both reported
-# side by side) and log was consistently the better-behaved fit, so raw
-# was dropped rather than carried forward as dead weight.
+# Modelled on the log scale, with sex as a fixed-effect covariate (rationale in
+# docs/diet-summary.md).
 fit_lmm <- function(param) {
   d <- fits %>% filter(reliable) %>%
     select(subject_id, diet, visit, sex, value = all_of(param)) %>%
@@ -244,15 +192,6 @@ cat("\n=== LMM (diet x visit, subject random intercept): F-tests ===\n")
 print(as.data.frame(lmm_results), digits = 3)
 
 # ---- Boxplot: diet x visit distributions for each parameter ---------------
-# capsule_dissolution_halflife_min deliberately excluded from all of this
-# script's summaries/plots: it only exists (k_release is only fit) for
-# subjects whose 13C6 curve still uses the original gradual-dissolution
-# mechanism - 9 of 68 fits in the latest full cohort run, the rest now use
-# the onset-lag or independent-second-wave mechanisms added this session,
-# which model 13C6 as an instant bolus with no capsule-release step at
-# all. Too small and too non-random a subset (it's exactly the "still
-# explained by the old, simpler mechanism" group) to summarize
-# meaningfully here.
 PARAM_LABELS <- c(ka = "ka (1/min)", kel = "kel (1/min)", F_12C = "F[12C]", F_13C6 = "F[13C6]")
 
 box_data <- bind_rows(
@@ -262,11 +201,8 @@ box_data <- bind_rows(
   fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_13C6", value = F_13C6)
 )
 
-# One PDF per parameter, faceted by diet arm and colored by visit
-# (VISIT_COLORS, matching diet_summary_curves_12C/13C6.pdf) rather than one
-# combined figure faceted by parameter and colored by diet - makes the
-# FCT1-vs-FCT2 comparison the primary visual read within each diet-arm
-# panel, consistent with how the curve plots present it.
+# One PDF per parameter, faceted by diet arm and colored by visit (VISIT_COLORS,
+# as in the curve plots).
 plot_param_boxplot <- function(param_name) {
   d <- box_data %>% filter(parameter == param_name)
   if (nrow(d) == 0) return(NULL)
@@ -292,15 +228,9 @@ for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
 cat("Saved results/diet_lmm_results.csv\n")
 
 # ---- Delta plots: within-subject before/after diet change, by diet arm ----
-# The boxplot above compares FCT1 and FCT2 as separate distributions; the
-# actual "did the diet change this parameter" question is the per-subject
-# FCT2-vs-FCT1 change, only defined for subjects with BOTH visits reliable
-# (so every delta is a complete pair, not a mix of paired and unpaired
-# values). Reported as a log fold-change (log(FCT2) - log(FCT1)), matching
-# the log-transformed LMMs above and for the same reason - these are
-# rate/fraction-like quantities better compared multiplicatively. Compared
-# between diet arms with a Wilcoxon rank-sum test (ggpubr::stat_compare_means)
-# rather than a t-test, since n per arm is small and not assumed normal.
+# Per-subject log fold-change (log(FCT2) - log(FCT1)) for subjects with both
+# visits reliable, compared between arms with a Wilcoxon rank-sum test. See
+# "Within-subject change (delta)" in docs/diet-summary.md.
 
 delta_param <- function(param) {
   fits %>% filter(reliable) %>%
@@ -335,18 +265,10 @@ ggsave("results/diet_parameter_delta_boxplot.pdf", p_delta, width = 11, height =
 cat("\nSaved results/diet_parameter_delta_boxplot.pdf and results/diet_parameter_deltas.csv\n")
 
 # ---- FCT1 vs FCT2 ("before/after") WITHIN each diet arm --------------------
-# A different question from the delta plot above (which compares the SIZE
-# of the FCT2-FCT1 change BETWEEN diet arms): this asks whether FCT1 and
-# FCT2 differ at all WITHIN each diet arm on its own. Computed as a paired
-# Wilcoxon signed-rank test - equivalent to a one-sample Wilcoxon test of
-# each subject's own delta (already computed above) against 0 - rather
-# than ggpubr's automatic pairing detection across facets, which silently
-# breaks if the same subject doesn't land in the same row order in every
-# facet. box_data (below) still shows every reliable single-visit value,
-# including subjects who only have one visit reliable - a larger, more
-# representative sample than the paired test itself can use (pairing
-# necessarily requires both visits), so the boxplot's own n and the test's
-# n legitimately differ; that's expected, not a bug.
+# Paired Wilcoxon signed-rank test (a one-sample Wilcoxon of each subject's
+# delta against 0), computed explicitly rather than via ggpubr's pairing
+# detection. The boxplot shows every reliable value, so its n differs from the
+# test's n. See "FCT1 vs FCT2 within each arm" in docs/diet-summary.md.
 before_after_p <- box_data %>%
   group_by(parameter, diet) %>%
   summarise(y.position = max(value, na.rm = TRUE) * 1.08, .groups = "drop") %>%
@@ -362,9 +284,7 @@ before_after_p <- box_data %>%
 
 write_csv(before_after_p, "results/diet_before_after_wilcoxon.csv")
 
-# One PDF per parameter here too, faceted by diet arm, colored by visit
-# (VISIT_COLORS) instead of a flat diet fill with no legend - same
-# rationale as plot_param_boxplot() above.
+# One PDF per parameter here too, faceted by diet arm, colored by visit.
 plot_before_after <- function(param_name) {
   d <- box_data %>% filter(parameter == param_name)
   if (nrow(d) == 0) return(NULL)
@@ -392,13 +312,8 @@ for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
 cat("Saved results/diet_before_after_wilcoxon.csv\n")
 
 # ---- Two-wave ("second peak") characteristics by diet arm -----------------
-# Whether a genuine second wave was detected at all (two_wave selected, via
-# has_peak_dip_rise() in 02_fit_erie_model.R) is itself a diet-relevant
-# outcome, and - among the subjects who show one - so is its timing
-# (t_lag, "time between peaks") and how much of the dose rode it
-# (f_delayed for 12C, f_delayed_13C6 for 13C6's own independent choice).
-# Exploratory only: just 12/68 curves are two_wave, so this is underpowered
-# and reported for completeness, not as a confirmed effect.
+# Exploratory only. See "Second-wave characteristics"
+# in docs/diet-summary.md.
 
 two_wave_rate <- fits %>% filter(reliable) %>%
   group_by(diet, visit) %>%
@@ -443,19 +358,10 @@ if (nrow(two_wave_params) >= 4) {
 }
 
 # ---- Average concentration-time curves per diet x visit x isotope ---------
-# Mirrors simulate_fit() in 02_fit_erie_model.R exactly - both curves' shape
-# depends on which model/mechanism won for that subject x visit, not just
-# on the plain single-compartment equations. Getting this wrong isn't just
-# a shape mismatch: two_wave's 13C6 stage always carries k_release, but
-# single_wave's newer 13C6 mechanisms (t_lag1_13C6 onset lag,
-# f_delayed2_13C6/t_lag2_13C6 second wave) both explicitly set
-# k_release = NA once they win (see fit_subject_visit_single_wave()) -
-# feeding that NA into simulate_delayed_release() silently returns NA for
-# every t>0, and since rowMeans()/sd() below aren't na.rm, ONE such subject
-# in a diet x visit group is enough to blank out that group's entire mean
-# curve. Confirmed: 14 of 21 single_wave rows in the full cohort have
-# k_release = NA (11 onset-lag + 3 second-wave), enough to hit virtually
-# every group - this is what silently broke every 13C6 panel.
+# Must mirror simulate_fit() in 02_fit_erie_model.R exactly: the mechanism that
+# won for each subject x visit determines the curve, and a mismatch (e.g. feeding
+# k_release = NA to simulate_delayed_release()) blanks a whole group's mean. See
+# "Mean concentration-time curves" in docs/diet-summary.md.
 average_curve_isotope <- function(diet_val, vis, isotope) {
   sub <- fits %>% filter(diet == diet_val, visit == vis, reliable)
   if (nrow(sub) == 0) return(NULL)
@@ -469,11 +375,8 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
       } else {
         bateman_conc(FINE_T_DIET, r$ka, r$kel, r$F_12C, r$dose_12C_mg, r$Vd)
       }
-      # t_lag1_13C6/t_lag2_13C6 checked FIRST, before dispatching on
-      # r$model - 13C6's own onset-lag/independent-second-wave mechanisms
-      # can now win under EITHER 12C model (see fit_subject_visit_two_wave()
-      # stage 2), so model alone no longer determines which 13C6 mechanism
-      # is actually in play.
+      # t_lag1_13C6/t_lag2_13C6 are checked before r$model: those 13C6 mechanisms
+      # can win under either 12C model.
     } else if (!is.na(r$t_lag1_13C6)) {
       simB <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, r$Vd)
       simulate_two_lag_dose(simB, FINE_T_DIET, dose_13C6_mg, f_delayed = 0, t_lag1 = r$t_lag1_13C6, gap = 0)
@@ -497,16 +400,8 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
   )
 }
 
-# Faceted by DIET ARM (not isotope x visit as an earlier version had it) so
-# FCT1 and FCT2 - the actual before/after-diet comparison - are overlaid
-# together within the same panel, colored by visit, rather than split
-# across separate panel columns where comparing them means tracking a
-# same-colored line across two plots. One PDF per isotope, not a shared
-# isotope-faceted figure: 12C and 13C6 differ by ~1000x in concentration
-# (same reason 02_fit_erie_model.R's per-subject plots use free y-scales),
-# so a combined figure either hides 13C6's shape entirely on a shared axis
-# or needs free scales that make the two isotopes hard to present, compare,
-# or caption together as one figure anyway.
+# Faceted by diet arm with FCT1/FCT2 overlaid by colour, one PDF per isotope
+# (12C and 13C6 differ ~1000x in concentration).
 plot_diet_curves <- function(isotope_val) {
   curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("FCT1", "FCT2")) %>%
     pmap_dfr(function(diet, visit) {

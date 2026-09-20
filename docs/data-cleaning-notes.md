@@ -44,11 +44,13 @@ the label when it's present and parses cleanly, and only falls back to the
 position rule (`<= 35` -> FCT1, `> 35` -> FCT2) when it isn't - e.g. the
 since-corrected typo in raw column 34 of `ERIE_fructose_13C.csv`
 (previously `"FCT -  34"`, missing the "1"), which the position rule
-recovered from while the typo existed. The cleaning script also compares
-label vs. position for every column and `warning()`s on any disagreement,
-since - now that the label is trusted when available - a real mismatch
-would silently change which visit a column's data is assigned to rather
-than being caught.
+recovered from while the typo existed. Note that the script does **not**
+cross-check label against position: because the label is trusted when
+present, a real mismatch would silently change which visit a column's data
+is assigned to instead of being flagged. The only automated consistency check
+is that every (subject, visit, time) point in one isotope file also exists in
+the other - both are drawn from the same blood samples - which raises a
+`warning()` otherwise.
 
 ## Inconsistent decimal marks across files
 
@@ -172,4 +174,6 @@ noted:
 - `erie_concentrations.csv` - `subject_id, visit, isotope, time_min, conc_umol_L`
 - `erie_covariates.csv` - one row per subject x visit: `bw_kg, sex, diet, height_cm, dose_12C_mg, dose_13C6_umol, dose_13C6_mg`
 - `erie_constants.csv` - `constant, value, unit`: physical/dosing constants
-- `cleaning_log.txt` - the QC output shown above, regenerated on every run
+  (13C6 dose in mg and µmol, both molecular weights, and the 12C dose per
+  kg). `MW_12C` (180.16 g/mol, unlabeled fructose) is a standard value, not
+  read from the raw files; `MW_13C6` is read from `ERIE_constants.xlsx`.

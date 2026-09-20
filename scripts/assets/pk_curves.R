@@ -112,31 +112,18 @@ simulate_delayed_release <- function(times, k_release, ka, kel, Fbio, dose, Vd) 
 #' ODE system for two simultaneously-dosed oral curves sharing a biphasic
 #' gastric-emptying process
 #'
-#' CAVEAT (kept for the record, superseded by [simulate_lagged_dose()] for
-#' reproducing an actual dip-then-rise): pilot fitting showed this structure
-#' cannot represent a genuine two-humped curve for any parameter values, and
-#' not for lack of searching - a targeted parameter search (thousands of
-#' draws, several hand-engineered attempts, including giving the two gastric
-#' pools independent absorption compartments and independent `ka`) never
-#' produced one. The reason is structural: any number of pathways that all
-#' still start delivering dose from t=0 and drain into one shared elimination
-#' compartment converge to the same single-exponential terminal decay
-#' (`kel`), so summing them can reshape/delay a single hump but not create a
-#' genuine local minimum followed by a second rise. What actually works is a
-#' genuine start-time offset (see [simulate_lagged_dose()]) - equivalent to a
-#' second, later dose - which breaks that shared-tail constraint.
+#' CAVEAT (kept for the record; superseded by [simulate_lagged_dose()]): this
+#' structure cannot represent a genuine two-humped curve for any parameter
+#' values. Any number of pathways that all start delivering dose at t=0 and
+#' drain into one shared elimination compartment converge to the same
+#' single-exponential terminal decay, so summing them can reshape or delay one
+#' hump but never create a local minimum followed by a second rise. A genuine
+#' start-time offset ([simulate_lagged_dose()]) does. See "The post-peak dip and
+#' the lagged-dose model" in docs/pk-model.md.
 #'
-#' Motivated by a post-peak dip-then-rise (or, at lower relative amplitude, a
-#' mere flattening of the decline) seen consistently around t=60-90min in a
-#' meaningful minority of curves, essentially always co-occurring on both
-#' curves of the same subject x visit at once when it appears strongly. A
-#' one-compartment absorption model is mathematically monotonic after its
-#' single peak for any parameter values, so it cannot represent this shape at
-#' all; a plausible mechanism is biphasic gastric emptying (e.g. transient
-#' duodenal-brake feedback inhibition from a large osmotic/caloric load,
-#' followed by a second emptying wave) - a process upstream of, and shared
-#' by, both simultaneously-ingested doses, rather than something in either
-#' curve's own absorption/clearance.
+#' Motivated by a post-peak dip-then-rise seen in a minority of curves, with
+#' biphasic gastric emptying (shared by both simultaneously-ingested doses) as
+#' the plausible mechanism.
 #'
 #' Generalizes the "instant full dose available at t=0" assumption (curve A,
 #' e.g. a liquid dose) and the single-pool delayed-release model (curve B,
@@ -228,7 +215,7 @@ simulate_biphasic_emptying <- function(times, f_fast, k_ge_fast, k_ge_slow, ka, 
   )
 }
 
-#' Split a dose into an immediate and a genuinely time-lagged second dose,
+#' Split a dose into an immediate and a time-lagged second dose,
 #' both absorbed/cleared through the same one-compartment kinetics
 #'
 #' Confirmed (pilot testing, see the caveat on [biphasic_emptying_ode()]) to
