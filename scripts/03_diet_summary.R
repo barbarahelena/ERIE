@@ -125,6 +125,35 @@ p_vd <- ggplot(vd_data, aes(diet, Vd, fill = diet)) +
 ggsave("results/diet_vd_boxplot.pdf", p_vd, width = 6, height = 5, dpi = 150)
 cat("\nSaved results/diet_vd_boxplot.pdf\n")
 
+# ---- Fit quality (R2) by diet arm and visit --------------------------------
+# Deliberately NOT gated on `reliable` - reliable excludes on r2_12C_low,
+# which is DERIVED from r2_12C itself, so filtering by it here would hide
+# exactly the poor fits this plot exists to surface. A QC/diagnostic view of
+# fit quality across the whole cohort, not a trustworthy-subset comparison
+# like the parameter plots below.
+R2_RELIABLE_MIN <- 0.70   # matches 02_fit_erie_model.R's own threshold
+
+r2_data <- bind_rows(
+  fits %>% filter(!is.na(r2_12C)) %>% transmute(subject_id, diet, visit, isotope = "12C", r2 = r2_12C),
+  fits %>% filter(!is.na(r2_13C6)) %>% transmute(subject_id, diet, visit, isotope = "13C6", r2 = r2_13C6)
+)
+
+p_r2 <- ggplot(r2_data, aes(visit, r2, fill = diet)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5, position = position_dodge(width = 0.6)) +
+  geom_point(aes(color = diet), position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.6),
+             size = 1.2, alpha = 0.6, show.legend = FALSE) +
+  geom_hline(yintercept = R2_RELIABLE_MIN, linetype = "dashed", color = "grey40") +
+  facet_wrap(vars(isotope), nrow = 1, labeller = labeller(isotope = ISOTOPE_LABELS)) +
+  scale_x_discrete(labels = VISIT_LABELS) +
+  scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+  scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+  labs(title = "Fit quality (R2) by diet arm and visit, all fitted subjects",
+       x = NULL, y = expression(R^2)) +
+  theme_Publication()
+
+ggsave("results/diet_r2_boxplot.pdf", p_r2, width = 9, height = 5, dpi = 150)
+cat("\nSaved results/diet_r2_boxplot.pdf\n")
+
 # ---- Parameter summary table (mean/SD/SEM/n per diet x visit) -------------
 
 summarise_param <- function(param) {
@@ -388,15 +417,20 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
       } else {
         bateman_conc(FINE_T_DIET, r$ka, r$kel, r$F_12C, r$dose_12C_mg, r$Vd)
       }
-    } else if (r$model == "two_wave") {
-      simB <- function(t, dose) simulate_delayed_release(t, r$k_release, r$ka, r$kel, r$F_13C6, dose, r$Vd)$conc
-      simulate_lagged_dose(simB, FINE_T_DIET, dose_13C6_mg, r$f_delayed_13C6, r$t_lag)
+      # t_lag1_13C6/t_lag2_13C6 checked FIRST, before dispatching on
+      # r$model - 13C6's own onset-lag/independent-second-wave mechanisms
+      # can now win under EITHER 12C model (see fit_subject_visit_two_wave()
+      # stage 2), so model alone no longer determines which 13C6 mechanism
+      # is actually in play.
     } else if (!is.na(r$t_lag1_13C6)) {
       simB <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, r$Vd)
       simulate_two_lag_dose(simB, FINE_T_DIET, dose_13C6_mg, f_delayed = 0, t_lag1 = r$t_lag1_13C6, gap = 0)
     } else if (!is.na(r$t_lag2_13C6)) {
       simB <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, r$Vd)
       simulate_lagged_dose(simB, FINE_T_DIET, dose_13C6_mg, r$f_delayed2_13C6, r$t_lag2_13C6)
+    } else if (r$model == "two_wave") {
+      simB <- function(t, dose) simulate_delayed_release(t, r$k_release, r$ka, r$kel, r$F_13C6, dose, r$Vd)$conc
+      simulate_lagged_dose(simB, FINE_T_DIET, dose_13C6_mg, r$f_delayed_13C6, r$t_lag)
     } else {
       simulate_delayed_release(FINE_T_DIET, r$k_release, r$ka, r$kel, r$F_13C6, dose_13C6_mg, r$Vd)$conc
     }

@@ -461,7 +461,17 @@ fit_subject_visit_single_wave <- function(sid, vis, extra_seeds = list(), maxit 
     lower_tw <- c(F_13C6 = BOUNDS_JOINT$F_13C6[1], f_delayed2_13C6 = 0.05, t_lag2_13C6 = 30)
     upper_tw <- c(F_13C6 = BOUNDS_JOINT$F_13C6[2], f_delayed2_13C6 = 0.95, t_lag2_13C6 = 150)
     fit_tw <- fit_multistart(obj_13C6_tw, lower_tw, upper_tw, seeds = seeds_tw, control = list(maxit = 60))
-    if (!is.null(fit_tw)) {
+    # A result pinned at f_delayed2_13C6's own LOWER bound (0.05) means the
+    # optimizer wants an even smaller delayed fraction than the bound
+    # allows - i.e. "no real second wave", the exact degenerate regime this
+    # bound exists to exclude (see the comment above). Confirmed on ER18
+    # FCT2: won AIC at f_delayed2_13C6=0.05 AND t_lag2_13C6=150
+    # (simultaneously pinned at BOTH its own bounds) despite the genuine
+    # dip evidence sitting at t=120, not t=150 - a spurious corner-of-the-
+    # box "improvement" unrelated to the actual evidence, not a real
+    # second wave. Rejected outright rather than compared on AIC at all.
+    at_lower_bound <- !is.null(fit_tw) && fit_tw$par[["f_delayed2_13C6"]] <= lower_tw[["f_delayed2_13C6"]] + 1e-3
+    if (!is.null(fit_tw) && !at_lower_bound) {
       aic_tw <- n13 * log(fit_tw$value / n13) + 2 * 3
       if (aic_tw < best_aic) {
         best_aic <- aic_tw
@@ -484,7 +494,7 @@ fit_subject_visit_single_wave <- function(sid, vis, extra_seeds = list(), maxit 
     r2_12C  = r2_12C,
     r2_13C6 = r2_13C6,
     kel_at_bound = kel > (BOUNDS_JOINT$kel[2] - 1e-4),
-    k_release_at_bound = par[["k_release"]] > (BOUNDS_JOINT$k_release[2] - 1e-4),
+    k_release_at_bound = isTRUE(par[["k_release"]] > (BOUNDS_JOINT$k_release[2] - 1e-4)),
     converged = fit$convergence == 0,   # see "Fit quality and what to trust" in docs/pk-model.md
     r2_12C_low  = r2_12C  < R2_RELIABLE_MIN,
     r2_13C6_low = r2_13C6 < R2_RELIABLE_MIN,
@@ -530,9 +540,10 @@ fit_subject_visit_single_wave <- function(sid, vis, extra_seeds = list(), maxit 
 # gave r2_13C6 = 0.075. Letting it fit its own fraction lets the data say
 # which wave (if not both) 13C6 actually rode.
 # ---------------------------------------------------------------------------
-fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 80) {
+fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 80, single_wave_r2_12C = NA_real_) {
   empty <- tibble(ka = NA, kel = NA, F_12C = NA, F_13C6 = NA, k_release = NA,
                    f_delayed = NA, t_lag = NA, f_delayed_13C6 = NA,
+                   t_lag1_13C6 = NA, f_delayed2_13C6 = NA, t_lag2_13C6 = NA,
                    r2_12C = NA, r2_13C6 = NA, kel_at_bound = NA, k_release_at_bound = NA,
                    converged = NA, r2_12C_low = NA, r2_13C6_low = NA, objective_value = NA,
                    rss_12C = NA, n_12C = NA, t30_present = NA)
@@ -577,7 +588,25 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
   # the first place.
   dip_evidence <- peak_dip_rise_info(obs12$time_min, obs12$conc_mgL)
   plateau_evidence <- has_near_peak_neighbor(obs12$time_min, obs12$conc_mgL)
-  if (!dip_evidence$detected && !plateau_evidence) return(mutate(empty, t30_present = TRUE))
+  # A third path in, alongside the two raw-data checks above: single_wave's
+  # OWN R2 being very poor is itself indirect evidence something is being
+  # missed structurally, even when neither dip nor plateau detector fires -
+  # two waves close enough together in time (physiologically plausible: the
+  # duodenal-brake/enterogastric feedback that paces gastric emptying
+  # typically pauses and resumes within tens of minutes) can compound into
+  # a single, smoothly-ACCELERATING rise with no dip or near-peak plateau
+  # at all, which is a shape neither detector is built to catch. Confirmed
+  # concretely on ER21 FCT1: single_wave R2=0.31 (t=30/60/90 = 32/61/132, a
+  # sudden more-than-doubling with no down-turn beforehand - structurally
+  # invisible to both detectors), yet an unconstrained two_wave search
+  # (bypassing this gate entirely) found R2=0.99 at t_lag=57,
+  # f_delayed=0.80 - essentially a perfect fit. Threshold set well below
+  # R2_RELIABLE_MIN (0.70) - this should only fire for fits bad enough that
+  # "the single-wave model doesn't fit AT ALL" is itself the signal, not a
+  # general substitute for the two raw-data checks above.
+  R2_ALWAYS_TRY_TWO_WAVE <- 0.50
+  poor_single_wave <- !is.na(single_wave_r2_12C) && single_wave_r2_12C < R2_ALWAYS_TRY_TWO_WAVE
+  if (!dip_evidence$detected && !plateau_evidence && !poor_single_wave) return(mutate(empty, t30_present = TRUE))
 
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
   Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
@@ -732,13 +761,96 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
   pred13 <- simulate_lagged_dose(simB_fixed, obs13$time_min, dose_13C6_mg, par13[["f_delayed_13C6"]], par12[["t_lag"]])
   r2_13C6 <- r_squared(obs13$conc_mgL, pred13)
 
+  # 13C6's own onset-lag and independent-second-wave candidates - identical
+  # in spirit and implementation to the two candidates added in
+  # fit_subject_visit_single_wave() (see the comments there for the full
+  # reasoning, validation numbers, and the noise safeguards on the
+  # second-wave candidate's bounds), just also offered here so 13C6's own
+  # mechanism choice doesn't depend on 12C's. Previously 13C6 ONLY had the
+  # baseline above (simulate_delayed_release, sharing 12C's own t_lag) once
+  # 12C was two_wave - confirmed concretely on ER23 FCT2: 13C6's own data
+  # goes from 0.009 at t=30 to 0.165 at t=60 (5.6% of peak, a textbook
+  # onset-lag shape), but the baseline mechanism collapsed to
+  # f_delayed_13C6=0.001 (effectively unable to express "near-zero until
+  # ~45min") and r2_13C6=0.35 - a structural mismatch no amount of
+  # optimization could fix, not a search failure. All three candidates
+  # (baseline K=3, onset-lag K=2, second-wave K=3) are compared via AIC on
+  # 13C6's own RSS.
+  n13 <- length(obs13$conc_mgL)
+  best_aic13 <- n13 * log(fit13$value / n13) + 2 * 3   # baseline: F_13C6/k_release/f_delayed_13C6, K=3
+  t_lag1_13C6 <- NA_real_
+  t_lag2_13C6 <- NA_real_
+  f_delayed2_13C6 <- NA_real_
+
+  if (has_onset_lag_evidence(obs13$time_min, obs13$conc_mgL)) {
+    obj_13C6_lag <- function(theta) {
+      simB <- function(t, dose) bateman_conc(t, par12[["ka"]], par12[["kel"]], theta[["F_13C6"]], dose, Vd)
+      pred <- tryCatch(simulate_two_lag_dose(simB, obs13$time_min, dose_13C6_mg, f_delayed = 0, t_lag1 = theta[["t_lag1_13C6"]], gap = 0), error = function(e) NULL)
+      if (is.null(pred) || any(!is.finite(pred))) return(1e10)
+      sum((pred - obs13$conc_mgL)^2)
+    }
+    seeds_lag <- lapply(c(10, 20, 30, 40, 50), function(tl) c(F_13C6 = par13[["F_13C6"]], t_lag1_13C6 = tl))
+    lower_lag <- c(F_13C6 = BOUNDS_JOINT$F_13C6[1], t_lag1_13C6 = 0)
+    upper_lag <- c(F_13C6 = BOUNDS_JOINT$F_13C6[2], t_lag1_13C6 = 90)
+    fit_lag <- fit_multistart(obj_13C6_lag, lower_lag, upper_lag, seeds = seeds_lag, control = list(maxit = 60))
+    if (!is.null(fit_lag)) {
+      aic_lag <- n13 * log(fit_lag$value / n13) + 2 * 2   # F_13C6/t_lag1_13C6, K=2
+      if (aic_lag < best_aic13) {
+        best_aic13 <- aic_lag
+        par13[["F_13C6"]] <- fit_lag$par[["F_13C6"]]
+        par13[["k_release"]] <- NA_real_
+        par13[["f_delayed_13C6"]] <- NA_real_
+        t_lag1_13C6 <- fit_lag$par[["t_lag1_13C6"]]
+        simB_final <- function(t, dose) bateman_conc(t, par12[["ka"]], par12[["kel"]], par13[["F_13C6"]], dose, Vd)
+        pred13 <- simulate_two_lag_dose(simB_final, obs13$time_min, dose_13C6_mg, f_delayed = 0, t_lag1 = t_lag1_13C6, gap = 0)
+        r2_13C6 <- r_squared(obs13$conc_mgL, pred13)
+      }
+    }
+  }
+
+  if (has_peak_dip_rise(obs13$time_min, obs13$conc_mgL) ||
+      has_near_peak_neighbor(obs13$time_min, obs13$conc_mgL)) {
+    obj_13C6_tw <- function(theta) {
+      simB <- function(t, dose) bateman_conc(t, par12[["ka"]], par12[["kel"]], theta[["F_13C6"]], dose, Vd)
+      pred <- tryCatch(simulate_lagged_dose(simB, obs13$time_min, dose_13C6_mg, theta[["f_delayed2_13C6"]], theta[["t_lag2_13C6"]]), error = function(e) NULL)
+      if (is.null(pred) || any(!is.finite(pred))) return(1e10)
+      sum((pred - obs13$conc_mgL)^2)
+    }
+    seeds_tw <- lapply(c(40, 60, 90, 120), function(tl)
+      c(F_13C6 = par13[["F_13C6"]], f_delayed2_13C6 = 0.5, t_lag2_13C6 = tl))
+    lower_tw <- c(F_13C6 = BOUNDS_JOINT$F_13C6[1], f_delayed2_13C6 = 0.05, t_lag2_13C6 = 30)
+    upper_tw <- c(F_13C6 = BOUNDS_JOINT$F_13C6[2], f_delayed2_13C6 = 0.95, t_lag2_13C6 = 150)
+    fit_tw <- fit_multistart(obj_13C6_tw, lower_tw, upper_tw, seeds = seeds_tw, control = list(maxit = 60))
+    # See the matching comment in fit_subject_visit_single_wave() - a
+    # result pinned at f_delayed2_13C6's own lower bound (0.05) means "no
+    # real second wave", the exact degenerate regime the bound exists to
+    # exclude, not a genuine improvement worth comparing on AIC at all.
+    at_lower_bound <- !is.null(fit_tw) && fit_tw$par[["f_delayed2_13C6"]] <= lower_tw[["f_delayed2_13C6"]] + 1e-3
+    if (!is.null(fit_tw) && !at_lower_bound) {
+      aic_tw <- n13 * log(fit_tw$value / n13) + 2 * 3   # F_13C6/f_delayed2_13C6/t_lag2_13C6, K=3
+      if (aic_tw < best_aic13) {
+        best_aic13 <- aic_tw
+        par13[["F_13C6"]] <- fit_tw$par[["F_13C6"]]
+        par13[["k_release"]] <- NA_real_
+        par13[["f_delayed_13C6"]] <- NA_real_
+        t_lag1_13C6 <- NA_real_   # mutually exclusive with the onset-lag candidate above
+        f_delayed2_13C6 <- fit_tw$par[["f_delayed2_13C6"]]
+        t_lag2_13C6 <- fit_tw$par[["t_lag2_13C6"]]
+        simB_final <- function(t, dose) bateman_conc(t, par12[["ka"]], par12[["kel"]], par13[["F_13C6"]], dose, Vd)
+        pred13 <- simulate_lagged_dose(simB_final, obs13$time_min, dose_13C6_mg, f_delayed2_13C6, t_lag2_13C6)
+        r2_13C6 <- r_squared(obs13$conc_mgL, pred13)
+      }
+    }
+  }
+
   tibble(
     ka = par12[["ka"]], kel = par12[["kel"]], F_12C = par12[["F_12C"]], F_13C6 = par13[["F_13C6"]],
     k_release = par13[["k_release"]], f_delayed = par12[["f_delayed"]], t_lag = par12[["t_lag"]],
     f_delayed_13C6 = par13[["f_delayed_13C6"]],
+    t_lag1_13C6 = t_lag1_13C6, f_delayed2_13C6 = f_delayed2_13C6, t_lag2_13C6 = t_lag2_13C6,
     r2_12C = r2_12C, r2_13C6 = r2_13C6,
     kel_at_bound = par12[["kel"]] > (BOUNDS_LAGGED_12C$kel[2] - 1e-4),
-    k_release_at_bound = par13[["k_release"]] > (BOUNDS_13C6_GIVEN_LAG$k_release[2] - 1e-4),
+    k_release_at_bound = isTRUE(par13[["k_release"]] > (BOUNDS_13C6_GIVEN_LAG$k_release[2] - 1e-4)),
     converged = fit12$convergence == 0 && fit13$convergence == 0,
     r2_12C_low = r2_12C < R2_RELIABLE_MIN,
     r2_13C6_low = r2_13C6 < R2_RELIABLE_MIN,
@@ -791,7 +903,7 @@ fit_one <- function(i) {
   # veto - is trusted to decide whether the extra complexity earns its keep.
   set.seed(string_seed(paste(sid, vis, "two_wave")))
   cat(sid, vis, if (definite_two_wave) "(two_wave - definite evidence)" else "(two_wave)", "\n")
-  tw <- fit_subject_visit_two_wave(sid, vis)
+  tw <- fit_subject_visit_two_wave(sid, vis, single_wave_r2_12C = sw$r2_12C)
   list(single_wave = sw, two_wave = tw, definite_two_wave = definite_two_wave)
 }
 
@@ -830,7 +942,15 @@ refit_flagged_two_wave <- function(i, seeds, maxit) {
   sid <- two_wave_results$subject_id[i]; vis <- two_wave_results$visit[i]
   set.seed(string_seed(paste(sid, vis, "two_wave retry")))
   cat(sid, vis, "(two_wave retry)\n")
-  fit_subject_visit_two_wave(sid, vis, extra_seeds = seeds, maxit = maxit)
+  # single_wave_results is already fully computed by this point (its own
+  # retry pass runs before this one) - looked up here rather than threaded
+  # through adaptive_retry()'s generic signature, so a fit that only passed
+  # the raw-data gate because of the R2_ALWAYS_TRY_TWO_WAVE override (see
+  # fit_subject_visit_two_wave()) doesn't get force-reset back to "not
+  # attempted" on retry.
+  sw_r2 <- single_wave_results$r2_12C[single_wave_results$subject_id == sid & single_wave_results$visit == vis]
+  fit_subject_visit_two_wave(sid, vis, extra_seeds = seeds, maxit = maxit,
+                              single_wave_r2_12C = if (length(sw_r2) == 1) sw_r2 else NA_real_)
 }
 two_wave_results <- adaptive_retry(
   two_wave_results,
@@ -927,7 +1047,17 @@ pick <- function(col) {
 }
 for (col in c("ka", "kel", "F_12C", "F_13C6", "k_release", "r2_12C", "r2_13C6",
               "kel_at_bound", "k_release_at_bound", "converged", "r2_12C_low", "r2_13C6_low",
-              "capsule_dissolution_halflife_min")) {
+              "capsule_dissolution_halflife_min",
+              # t_lag1_13C6/f_delayed2_13C6/t_lag2_13C6: 13C6's own onset-lag
+              # and independent-second-wave candidates now exist in BOTH
+              # single_wave_results and two_wave_results (see the comment on
+              # fit_subject_visit_two_wave()'s stage 2 - these used to only
+              # exist in single_wave_results, which structurally couldn't
+              # represent an onset-delayed or independently-timed 13C6
+              # curve whenever 12C itself was two_wave; confirmed broken on
+              # ER23 FCT2), so they're picked the same way as every other
+              # shared column now, not force-nulled by model.
+              "t_lag1_13C6", "f_delayed2_13C6", "t_lag2_13C6")) {
   results[[col]] <- pick(col)
 }
 # f_delayed/t_lag/f_delayed_13C6 only exist in two_wave_results (single_wave
@@ -938,12 +1068,6 @@ for (col in c("ka", "kel", "F_12C", "F_13C6", "k_release", "r2_12C", "r2_13C6",
 results$f_delayed <- if_else(results$model == "two_wave", results$f_delayed, NA_real_)
 results$t_lag      <- if_else(results$model == "two_wave", results$t_lag, NA_real_)
 results$f_delayed_13C6 <- if_else(results$model == "two_wave", results$f_delayed_13C6, NA_real_)
-# t_lag1_13C6/f_delayed2_13C6/t_lag2_13C6 are the mirror image - they only
-# exist in single_wave_results (not yet wired into two_wave's own 13C6
-# stage), so mask them out when two_wave wins instead.
-results$t_lag1_13C6 <- if_else(results$model == "single_wave", results$t_lag1_13C6, NA_real_)
-results$f_delayed2_13C6 <- if_else(results$model == "single_wave", results$f_delayed2_13C6, NA_real_)
-results$t_lag2_13C6 <- if_else(results$model == "single_wave", results$t_lag2_13C6, NA_real_)
 # t30_present (kept from single_wave's own copy via the join above, since
 # that model is always attempted regardless of whether two_wave was skipped)
 # is a property of the data, not of which model won - ka is poorly anchored
@@ -979,24 +1103,28 @@ simulate_fit <- function(sid, vis, r) {
 
   if (r$model == "two_wave") {
     simA <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_12C, dose, Vd)
-    simB <- function(t, dose) simulate_delayed_release(t, r$k_release, r$ka, r$kel, r$F_13C6, dose, Vd)$conc
     sim12 <- simulate_lagged_dose(simA, fine, dose_12C, r$f_delayed, r$t_lag)
-    sim13 <- simulate_lagged_dose(simB, fine, dose_13C6_mg, r$f_delayed_13C6, r$t_lag)
   } else {
     sim12 <- bateman_conc(fine, r$ka, r$kel, r$F_12C, dose_12C, Vd)
-    # 13C6's own onset lag (t_lag1_13C6) or its own separate second hump
-    # (f_delayed2_13C6/t_lag2_13C6, see fit_subject_visit_single_wave()) are
-    # both instant-bolus mechanisms, not simulate_delayed_release - must be
-    # applied here too, or the plotted curve silently doesn't match what
-    # r2_13C6 was actually computed against.
-    simB_instant <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, Vd)
-    sim13 <- if (!is.na(r$t_lag1_13C6)) {
-      simulate_two_lag_dose(simB_instant, fine, dose_13C6_mg, f_delayed = 0, t_lag1 = r$t_lag1_13C6, gap = 0)
-    } else if (!is.na(r$t_lag2_13C6)) {
-      simulate_lagged_dose(simB_instant, fine, dose_13C6_mg, r$f_delayed2_13C6, r$t_lag2_13C6)
-    } else {
-      simulate_delayed_release(fine, r$k_release, r$ka, r$kel, r$F_13C6, dose_13C6_mg, Vd)$conc
-    }
+  }
+
+  # 13C6's own mechanism choice is independent of 12C's model (see the
+  # comment on fit_subject_visit_two_wave()'s stage 2) - t_lag1_13C6 (onset
+  # lag) and f_delayed2_13C6/t_lag2_13C6 (an independently-timed second
+  # wave) are both instant-bolus mechanisms (plain bateman_conc), not
+  # simulate_delayed_release, and can now win under EITHER 12C model - must
+  # be dispatched on here too, or the plotted curve silently doesn't match
+  # what r2_13C6 was actually computed against.
+  simB_instant <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, Vd)
+  sim13 <- if (!is.na(r$t_lag1_13C6)) {
+    simulate_two_lag_dose(simB_instant, fine, dose_13C6_mg, f_delayed = 0, t_lag1 = r$t_lag1_13C6, gap = 0)
+  } else if (!is.na(r$t_lag2_13C6)) {
+    simulate_lagged_dose(simB_instant, fine, dose_13C6_mg, r$f_delayed2_13C6, r$t_lag2_13C6)
+  } else if (r$model == "two_wave") {
+    simB <- function(t, dose) simulate_delayed_release(t, r$k_release, r$ka, r$kel, r$F_13C6, dose, Vd)$conc
+    simulate_lagged_dose(simB, fine, dose_13C6_mg, r$f_delayed_13C6, r$t_lag)
+  } else {
+    simulate_delayed_release(fine, r$k_release, r$ka, r$kel, r$F_13C6, dose_13C6_mg, Vd)$conc
   }
 
   t_end <- max(time_to_clearance(fine, sim12, CLEARANCE_FRAC),

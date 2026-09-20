@@ -218,6 +218,46 @@ Two rules override a pure AIC comparison:
     the fit still wanted to exploit the unsampled 0-30min gap, just
     clipped at the boundary, not a freely-preferred timing.
 
+**Added: a third path in, alongside the two raw-data checks above -
+`single_wave`'s own R² being very poor (`< R2_ALWAYS_TRY_TWO_WAVE = 0.50`)
+also triggers a `two_wave` attempt, even with neither dip nor plateau
+evidence.** Two waves close enough together in time - physiologically
+plausible here: the duodenal-brake/enterogastric feedback that paces
+gastric emptying of a large caloric/osmotic load (this study's 1 g/kg
+fructose dose) typically pauses and resumes on a tens-of-minutes
+timescale - can compound into a single, smoothly-ACCELERATING rise with no
+down-turn and no near-peak plateau at all, a shape neither detector is
+built to catch (both require the data to already show some sign of
+non-monotonic or blended behavior). Confirmed concretely on `ER21` FCT1:
+raw 12C at t=30/60/90 is 32/61/132 mg/L, a sudden more-than-doubling with
+no down-turn beforehand - `single_wave` R²=0.31, and neither gate fires.
+An unconstrained `two_wave` search (bypassing the gate entirely, for
+diagnosis) found R²=0.99 at `t_lag`=57min, `f_delayed`=0.80 - essentially
+a perfect fit. Threshold set well below `R2_RELIABLE_MIN` (0.70) so this
+only fires when `single_wave` doesn't fit AT ALL, not as a general
+substitute for the two raw-data checks.
+
+**Fixed: a `parscale` bug in `fit_multistart()` (`pk_fit.R`) that was
+causing genuinely missed optima, not just failed-to-attempt cases.**
+`optim(method = "L-BFGS-B")`'s internal step sizing assumes roughly
+unit-scaled parameters; the previous default (`parscale = upper - lower`)
+is a poor proxy for that whenever a parameter's bounds are deliberately
+wide open relative to its typical fitted value - `ka`/`F_12C` are bounded
+`[1e-4, 1]` (to not bias the research question) even though real values
+sit around 0.01-0.05, making their parscale ~20-100x too large. Confirmed
+concretely on `ER11` FCT1: production's own objective (including its
+`MIN_TMAX`/`CMAX` penalties) scored the *reported* fit (`t_lag`=47.3) at
+0.208, while a search using each start's OWN magnitude as parscale found
+0.188 at `t_lag`=120 - which lines up with the actual post-peak dip
+evidence (`trigger_time`=150) that justified attempting `two_wave` in the
+first place; the old bound-width parscale reproduced the same stuck
+behavior as no parscale at all. Fixed by computing parscale PER START from
+that start's own magnitude (floored at 1% of the bound range) rather than
+once globally from the bounds - a multistart seed is already meant to be
+in the right neighborhood (informed by a pre-fit, evidence anchor, or a
+systematic grid), so its own magnitude is a far better local-scale
+estimate than the global bound width.
+
 **Removed:** the earlier third rule (never attempt `two_wave` when
 `single_wave` already fits with R² > 0.95) turned out not to be doing the
 actual protective work its rationale implied. It wasn't even the thing
@@ -377,6 +417,35 @@ onset-lag candidate and for the same reason. Compared via AIC (K=3) against
 whichever candidate is currently winning (no-lag or onset-lag, K=2 either
 way) - mutually exclusive with the onset-lag candidate, since both explain
 the same flat/slow start in different ways.
+
+**Fixed: these two 13C6 candidates (onset-lag and independent second-wave)
+are now also available when 12C itself is `two_wave`**, not just
+`single_wave` - previously, whenever 12C was `two_wave`, 13C6 was stuck
+with only `fit_subject_visit_two_wave()`'s stage-2 mechanism
+(`simulate_delayed_release`, sharing 12C's own `t_lag`), which structurally
+cannot represent an onset-delayed or independently-timed 13C6 curve.
+Confirmed broken on `ER23` FCT2: 13C6's own data goes from 0.009 mg/L at
+t=30 to 0.165 at t=60 (5.6% of peak, a textbook onset-lag shape), but with
+12C selected as `two_wave` (correctly, on its own merits), the baseline
+mechanism collapsed to `f_delayed_13C6`=0.001 and r2_13C6=0.35 - not a
+search failure, a structural mismatch no amount of optimization could fix.
+Now all three candidates (baseline K=3, onset-lag K=2, second-wave K=3)
+are compared via AIC on 13C6's own RSS regardless of 12C's own model;
+fixed, `ER23` FCT2 correctly picks up its own onset lag (~27min) and
+reaches r2_13C6=0.78.
+
+**Fixed: a boundary-pinned false positive in the second-wave candidate.**
+`f_delayed2_13C6` landing at (or within 1e-3 of) its own lower bound (0.05)
+means the optimizer wants an even smaller delayed fraction than the bound
+allows - i.e. no real second wave at all, the exact degenerate regime that
+bound exists to exclude - so this candidate is now rejected outright
+(not even AIC-compared) whenever that happens, in both branches. Found on
+`ER18` FCT2: won its AIC comparison at `f_delayed2_13C6`=0.05 **and**
+`t_lag2_13C6`=150 simultaneously (both own bounds, at once) despite the
+curve's genuine dip evidence sitting at t=120, not t=150 - a spurious
+corner-of-the-box "improvement" unrelated to the actual evidence. With the
+guard, `ER18` FCT2 correctly falls back to the baseline mechanism
+(r2_13C6=0.66, down from the spurious 0.71, but honest).
 
 **Tested but deliberately not adopted (yet):**
 - **A two-lag onset-time extension** (`simulate_two_lag_dose()`, also in
