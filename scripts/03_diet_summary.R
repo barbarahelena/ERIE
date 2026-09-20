@@ -55,6 +55,7 @@ ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
 VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
 DIET_LABELS    <- c(low_fructose = "Low fructose diet", high_fructose = "High fructose diet")
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
+VISIT_COLORS   <- c(FCT1 = "#4477AA", FCT2 = "#CC6677")
 FINE_T_DIET <- seq(0, 400, by = 2)
 # Cutoff for inclusion in this script's plots/statistics - deliberately
 # separate from (and stricter than) 02_fit_erie_model.R's own
@@ -249,20 +250,34 @@ box_data <- bind_rows(
   fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_13C6", value = F_13C6)
 )
 
-p_box <- ggplot(box_data, aes(visit, value, fill = diet)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5, position = position_dodge(width = 0.6)) +
-  geom_point(aes(color = diet), position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.6),
-             size = 1.2, alpha = 0.6, show.legend = FALSE) +
-  facet_wrap(vars(parameter), scales = "free_y", nrow = 2,
-             labeller = labeller(parameter = PARAM_LABELS)) +
-  scale_x_discrete(labels = VISIT_LABELS) +
-  scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-  scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-  labs(title = "Fitted PK parameters by diet arm and visit", x = NULL, y = NULL) +
-  theme_Publication()
+# One PDF per parameter, faceted by diet arm and colored by visit
+# (VISIT_COLORS, matching diet_summary_curves_12C/13C6.pdf) rather than one
+# combined figure faceted by parameter and colored by diet - makes the
+# FCT1-vs-FCT2 comparison the primary visual read within each diet-arm
+# panel, consistent with how the curve plots present it.
+plot_param_boxplot <- function(param_name) {
+  d <- box_data %>% filter(parameter == param_name)
+  if (nrow(d) == 0) return(NULL)
+  ggplot(d, aes(visit, value, fill = visit)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
+    geom_jitter(aes(color = visit), width = 0.08, size = 1.2, alpha = 0.6, show.legend = FALSE) +
+    facet_wrap(vars(diet), nrow = 1, labeller = labeller(diet = DIET_LABELS)) +
+    scale_x_discrete(labels = VISIT_LABELS) +
+    scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    scale_color_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    labs(title = sprintf("%s by diet arm and visit", PARAM_LABELS[[param_name]]), x = NULL, y = NULL) +
+    theme_Publication()
+}
 
-ggsave("results/diet_parameter_boxplot.pdf", p_box, width = 11, height = 7, dpi = 150)
-cat("\nSaved results/diet_parameter_boxplot.pdf and results/diet_lmm_results.csv\n")
+for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
+  p <- plot_param_boxplot(param_name)
+  if (!is.null(p)) {
+    out_path <- sprintf("results/diet_parameter_boxplot_%s.pdf", param_name)
+    ggsave(out_path, p, width = 7, height = 5, dpi = 150)
+    cat("\nSaved", out_path, "\n")
+  }
+}
+cat("Saved results/diet_lmm_results.csv\n")
 
 # ---- Delta plots: within-subject before/after diet change, by diet arm ----
 # The boxplot above compares FCT1 and FCT2 as separate distributions; the
@@ -335,20 +350,34 @@ before_after_p <- box_data %>%
 
 write_csv(before_after_p, "results/diet_before_after_wilcoxon.csv")
 
-p_before_after <- ggplot(box_data, aes(visit, value, fill = diet)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
-  geom_jitter(width = 0.08, size = 1.1, alpha = 0.5, show.legend = FALSE) +
-  stat_pvalue_manual(before_after_p, label = "label", tip.length = 0.01, size = 2.8) +
-  facet_grid(rows = vars(parameter), cols = vars(diet), scales = "free_y",
-             labeller = labeller(parameter = PARAM_LABELS, diet = DIET_LABELS)) +
-  scale_x_discrete(labels = VISIT_LABELS) +
-  scale_fill_manual(values = DIET_COLORS, guide = "none") +
-  labs(title = "FCT1 vs FCT2 within each diet arm (paired Wilcoxon signed-rank test)",
-       x = NULL, y = NULL) +
-  theme_Publication()
+# One PDF per parameter here too, faceted by diet arm, colored by visit
+# (VISIT_COLORS) instead of a flat diet fill with no legend - same
+# rationale as plot_param_boxplot() above.
+plot_before_after <- function(param_name) {
+  d <- box_data %>% filter(parameter == param_name)
+  if (nrow(d) == 0) return(NULL)
+  ann <- before_after_p %>% filter(parameter == param_name)
+  ggplot(d, aes(visit, value, fill = visit)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
+    geom_jitter(width = 0.08, size = 1.1, alpha = 0.5, show.legend = FALSE) +
+    stat_pvalue_manual(ann, label = "label", tip.length = 0.01, size = 2.8) +
+    facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
+    scale_x_discrete(labels = VISIT_LABELS) +
+    scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    labs(title = sprintf("%s: FCT1 vs FCT2 within each diet arm (paired Wilcoxon)", PARAM_LABELS[[param_name]]),
+         x = NULL, y = NULL) +
+    theme_Publication()
+}
 
-ggsave("results/diet_before_after_boxplot.pdf", p_before_after, width = 9, height = 11, dpi = 150)
-cat("\nSaved results/diet_before_after_boxplot.pdf and results/diet_before_after_wilcoxon.csv\n")
+for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
+  p <- plot_before_after(param_name)
+  if (!is.null(p)) {
+    out_path <- sprintf("results/diet_before_after_boxplot_%s.pdf", param_name)
+    ggsave(out_path, p, width = 7, height = 5, dpi = 150)
+    cat("\nSaved", out_path, "\n")
+  }
+}
+cat("Saved results/diet_before_after_wilcoxon.csv\n")
 
 # ---- Two-wave ("second peak") characteristics by diet arm -----------------
 # Whether a genuine second wave was detected at all (two_wave selected, via
@@ -466,8 +495,6 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
 # so a combined figure either hides 13C6's shape entirely on a shared axis
 # or needs free scales that make the two isotopes hard to present, compare,
 # or caption together as one figure anyway.
-VISIT_COLORS <- c(FCT1 = "#4477AA", FCT2 = "#CC6677")
-
 plot_diet_curves <- function(isotope_val) {
   curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("FCT1", "FCT2")) %>%
     pmap_dfr(function(diet, visit) {
