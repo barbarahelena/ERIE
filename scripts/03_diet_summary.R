@@ -362,7 +362,19 @@ if (nrow(two_wave_params) >= 4) {
 }
 
 # ---- Average concentration-time curves per diet x visit x isotope ---------
-
+# Mirrors simulate_fit() in 02_fit_erie_model.R exactly - both curves' shape
+# depends on which model/mechanism won for that subject x visit, not just
+# on the plain single-compartment equations. Getting this wrong isn't just
+# a shape mismatch: two_wave's 13C6 stage always carries k_release, but
+# single_wave's newer 13C6 mechanisms (t_lag1_13C6 onset lag,
+# f_delayed2_13C6/t_lag2_13C6 second wave) both explicitly set
+# k_release = NA once they win (see fit_subject_visit_single_wave()) -
+# feeding that NA into simulate_delayed_release() silently returns NA for
+# every t>0, and since rowMeans()/sd() below aren't na.rm, ONE such subject
+# in a diet x visit group is enough to blank out that group's entire mean
+# curve. Confirmed: 14 of 21 single_wave rows in the full cohort have
+# k_release = NA (11 onset-lag + 3 second-wave), enough to hit virtually
+# every group - this is what silently broke every 13C6 panel.
 average_curve_isotope <- function(diet_val, vis, isotope) {
   sub <- fits %>% filter(diet == diet_val, visit == vis, reliable)
   if (nrow(sub) == 0) return(NULL)
@@ -370,7 +382,21 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
   conc_list <- sub %>% pmap(function(...) {
     r <- list(...)
     if (isotope == "12C") {
-      bateman_conc(FINE_T_DIET, r$ka, r$kel, r$F_12C, r$dose_12C_mg, r$Vd)
+      if (r$model == "two_wave") {
+        simA <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_12C, dose, r$Vd)
+        simulate_lagged_dose(simA, FINE_T_DIET, r$dose_12C_mg, r$f_delayed, r$t_lag)
+      } else {
+        bateman_conc(FINE_T_DIET, r$ka, r$kel, r$F_12C, r$dose_12C_mg, r$Vd)
+      }
+    } else if (r$model == "two_wave") {
+      simB <- function(t, dose) simulate_delayed_release(t, r$k_release, r$ka, r$kel, r$F_13C6, dose, r$Vd)$conc
+      simulate_lagged_dose(simB, FINE_T_DIET, dose_13C6_mg, r$f_delayed_13C6, r$t_lag)
+    } else if (!is.na(r$t_lag1_13C6)) {
+      simB <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, r$Vd)
+      simulate_two_lag_dose(simB, FINE_T_DIET, dose_13C6_mg, f_delayed = 0, t_lag1 = r$t_lag1_13C6, gap = 0)
+    } else if (!is.na(r$t_lag2_13C6)) {
+      simB <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, r$Vd)
+      simulate_lagged_dose(simB, FINE_T_DIET, dose_13C6_mg, r$f_delayed2_13C6, r$t_lag2_13C6)
     } else {
       simulate_delayed_release(FINE_T_DIET, r$k_release, r$ka, r$kel, r$F_13C6, dose_13C6_mg, r$Vd)$conc
     }
