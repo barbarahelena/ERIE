@@ -56,6 +56,13 @@ VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
 DIET_LABELS    <- c(low_fructose = "Low fructose diet", high_fructose = "High fructose diet")
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
 FINE_T_DIET <- seq(0, 400, by = 2)
+# Cutoff for inclusion in this script's plots/statistics - deliberately
+# separate from (and stricter than) 02_fit_erie_model.R's own
+# R2_RELIABLE_MIN (0.70), which just flags a fit for that pipeline's own
+# retry logic, not for whether it belongs in a diet-arm summary. 0.85 of
+# 68 cohort fits currently drops 5 (r2_12C in 0.79-0.84), none of them
+# otherwise kel-bound.
+R2_INCLUDE_MIN <- 0.85
 
 # Open data
 results      <- read_csv("results/fit_results.csv", show_col_types = FALSE)
@@ -73,8 +80,8 @@ fits <- fits %>%
     Vd = nadler_blood_volume(bw_kg, height_cm, sex),
     dose_12C_mg = 1000 * bw_kg,
     # Reliability gated on the 12C fit only: it isn't stuck at the shared
-    # kel bound, and its own R2 isn't flagged. Applied uniformly to every
-    # parameter (including F_13C6/capsule dissolution) rather than
+    # kel bound, and its own R2 clears R2_INCLUDE_MIN. Applied uniformly to
+    # every parameter (including F_13C6/capsule dissolution) rather than
     # additionally requiring 13C6's own R2/k_release bound to pass - 13C6's
     # much smaller, noisier signal fails its own bar far more often even
     # when the underlying shared kinetics (from the same joint fit) are
@@ -94,7 +101,7 @@ fits <- fits %>%
     # 32% per-curve "not converged" rate compounds to exclude the majority
     # of subjects from any paired comparison even though the fits it drops
     # are just as trustworthy by R2 as the ones it keeps.
-    reliable = !kel_at_bound & !r2_12C_low
+    reliable = !kel_at_bound & r2_12C >= R2_INCLUDE_MIN
   )
 
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
