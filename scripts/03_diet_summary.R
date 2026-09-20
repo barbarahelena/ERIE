@@ -445,28 +445,46 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
   )
 }
 
-diet_curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("FCT1", "FCT2"), isotope = c("12C", "13C6")) %>%
-  pmap_dfr(function(diet, visit, isotope) {
-    ac <- average_curve_isotope(diet, visit, isotope)
-    if (is.null(ac)) return(NULL)
-    ac %>% mutate(diet = diet, visit = visit, isotope = isotope)
-  })
+# Faceted by DIET ARM (not isotope x visit as an earlier version had it) so
+# FCT1 and FCT2 - the actual before/after-diet comparison - are overlaid
+# together within the same panel, colored by visit, rather than split
+# across separate panel columns where comparing them means tracking a
+# same-colored line across two plots. One PDF per isotope, not a shared
+# isotope-faceted figure: 12C and 13C6 differ by ~1000x in concentration
+# (same reason 02_fit_erie_model.R's per-subject plots use free y-scales),
+# so a combined figure either hides 13C6's shape entirely on a shared axis
+# or needs free scales that make the two isotopes hard to present, compare,
+# or caption together as one figure anyway.
+VISIT_COLORS <- c(FCT1 = "#4477AA", FCT2 = "#CC6677")
 
-# facet_grid (isotope x visit), not facet_wrap, so each ISOTOPE ROW gets its
-# own free y-scale shared across the two visit columns - the 12C and 13C6
-# curves differ by ~1000x in concentration (same reason 02_fit_erie_model.R's
-# per-subject plots use free scales), but FCT1 vs FCT2 for the same isotope
-# are on a comparable scale and are usefully left directly comparable.
-p <- ggplot(diet_curves, aes(time_min, mean_conc, color = diet, fill = diet)) +
-  geom_ribbon(aes(ymin = mean_conc - sem_conc, ymax = mean_conc + sem_conc), alpha = 0.2, color = NA) +
-  geom_line(linewidth = 0.9) +
-  facet_grid(rows = vars(isotope), cols = vars(visit), scales = "free_y",
-             labeller = labeller(isotope = ISOTOPE_LABELS, visit = VISIT_LABELS)) +
-  scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-  scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-  labs(title = "Mean fructose concentration by dietary arm",
-       x = "Time (min)", y = "Concentration (mg/L)") +
-  theme_Publication()
+plot_diet_curves <- function(isotope_val) {
+  curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("FCT1", "FCT2")) %>%
+    pmap_dfr(function(diet, visit) {
+      ac <- average_curve_isotope(diet, visit, isotope_val)
+      if (is.null(ac)) return(NULL)
+      ac %>% mutate(diet = diet, visit = visit)
+    })
+  if (nrow(curves) == 0) return(NULL)
 
-ggsave("results/diet_summary_curves.pdf", p, width = 10, height = 7, dpi = 150)
-cat("\nSaved results/diet_summary_curves.pdf and results/diet_parameter_summary.csv\n")
+  ggplot(curves, aes(time_min, mean_conc, color = visit, fill = visit)) +
+    geom_ribbon(aes(ymin = mean_conc - sem_conc, ymax = mean_conc + sem_conc), alpha = 0.2, color = NA) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
+    scale_color_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    labs(title = sprintf("Mean %s concentration: FCT1 vs FCT2 within each diet arm", ISOTOPE_LABELS[[isotope_val]]),
+         x = "Time (min)", y = "Concentration (mg/L)") +
+    theme_Publication()
+}
+
+p_12C <- plot_diet_curves("12C")
+if (!is.null(p_12C)) {
+  ggsave("results/diet_summary_curves_12C.pdf", p_12C, width = 9, height = 5, dpi = 150)
+  cat("\nSaved results/diet_summary_curves_12C.pdf\n")
+}
+p_13C6 <- plot_diet_curves("13C6")
+if (!is.null(p_13C6)) {
+  ggsave("results/diet_summary_curves_13C6.pdf", p_13C6, width = 9, height = 5, dpi = 150)
+  cat("\nSaved results/diet_summary_curves_13C6.pdf\n")
+}
+cat("\nSaved results/diet_parameter_summary.csv\n")
