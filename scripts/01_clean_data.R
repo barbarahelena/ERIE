@@ -35,7 +35,10 @@ read_fructose_file <- function(path, isotope_name, locale) {
       subject_id     = sprintf("ER%02d", if_else(index <= 35, index, index - 35L)),
       visit_label    = str_extract(col_label, "FCT[12]"),
       visit_position = if_else(index <= 35, "FCT1", "FCT2"),
-      visit          = coalesce(visit_label, visit_position),
+      # "baseline"/"intervention" is the coded value used everywhere
+      # downstream; FCT1/FCT2 stays the raw-file vocabulary only.
+      visit          = recode_values(coalesce(visit_label, visit_position),
+                                      from = c("FCT1", "FCT2"), to = c("baseline", "intervention")),
       isotope        = isotope_name
     )
   df %>% select(subject_id, visit, isotope, time_min, conc_umol_L)
@@ -71,8 +74,9 @@ bodyweights <- wh_raw %>%
     FCT1 = fct1_gewicht,
     FCT2 = fct2_gewicht
   ) %>%
-  pivot_longer(c(FCT1, FCT2), names_to = "visit", values_to = "bw_kg")
-# ER33/ER34 have no FCT2 body weight, dropped out of study
+  pivot_longer(c(FCT1, FCT2), names_to = "visit", values_to = "bw_kg") %>%
+  mutate(visit = recode_values(visit, from = c("FCT1", "FCT2"), to = c("baseline", "intervention")))
+# ER33/ER34 have no FCT2 (intervention) body weight, dropped out of study
 
 heights <- wh_raw %>%
   transmute(
