@@ -37,7 +37,7 @@ read_fructose_file <- function(path, isotope_name, locale) {
       visit_position = if_else(index <= 35, "FCT1", "FCT2"),
       # "baseline"/"intervention" is the coded value used everywhere
       # downstream; FCT1/FCT2 stays the raw-file vocabulary only.
-      visit          = recode_values(coalesce(visit_label, visit_position),
+      visit          = dplyr::recode_values(coalesce(visit_label, visit_position),
                                       from = c("FCT1", "FCT2"), to = c("baseline", "intervention")),
       isotope        = isotope_name
     )
@@ -75,7 +75,7 @@ bodyweights <- wh_raw %>%
     FCT2 = fct2_gewicht
   ) %>%
   pivot_longer(c(FCT1, FCT2), names_to = "visit", values_to = "bw_kg") %>%
-  mutate(visit = recode_values(visit, from = c("FCT1", "FCT2"), to = c("baseline", "intervention")))
+  mutate(visit = dplyr::recode_values(visit, from = c("FCT1", "FCT2"), to = c("baseline", "intervention")))
 # ER33/ER34 have no FCT2 (intervention) body weight, dropped out of study
 
 heights <- wh_raw %>%
@@ -99,7 +99,7 @@ sex <- read_csv(file.path(raw_dir, "ERIE_metadata_sex.csv"), show_col_types = FA
 diet_raw <- read_xlsx(file.path(raw_dir, "ERIE_Diets.xlsx"))
 diet <- tibble(
   subject_id = diet_raw[[1]],
-  diet = recode_values(diet_raw$Diet, from = c("A", "B"), to = c("low_fructose", "high_fructose"))
+  diet = dplyr::recode_values(diet_raw$Diet, from = c("A", "B"), to = c("low_fructose", "high_fructose"))
 )
 
 # =============================================================================

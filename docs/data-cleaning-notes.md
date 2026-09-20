@@ -163,8 +163,9 @@ assignment, fixed across baseline/intervention (the diet intervention
 happens *between* the two visits, not during them), so it's joined into
 `erie_covariates.csv`
 by `subject_id` alone, not `subject_id + visit`. Used by
-`scripts/03_diet_summary.R` for the diet-arm comparison plot and parameter
-table; the PK fitting itself (`02_fit_erie_model.R`) doesn't need it.
+`scripts/03_diet_summary.R` for the diet-arm comparison plot, parameter
+table, and paired baseline-vs-intervention comparison (per diet arm); the
+PK fitting itself (`02_fit_erie_model.R`) doesn't need it.
 
 ## Output files
 
