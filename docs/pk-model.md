@@ -19,8 +19,10 @@ combined dose:
   644.78 µmol, confirmed administered dose; see `docs/data-cleaning-notes.md`
   for the dose discrepancy this project resolved).
 
-Every subject has this pair of curves at both FCT1 (baseline) and FCT2
-(post 4-week diet intervention).
+Every subject has this pair of curves at both FCT1 (coded `baseline`) and
+FCT2 (coded `intervention`, post 4-week diet intervention) - `visit` in the
+cleaned data and everywhere downstream is `baseline`/`intervention`, not the
+raw `FCT1`/`FCT2` labels.
 
 ## Model structure
 
@@ -130,12 +132,12 @@ model as `F * dose / Vd` (see the identifiability caveat below), a smaller
 Vd at the same observed concentration implies a smaller `F` - so
 `F_12C`/`F_13C6` values from this version are **not directly comparable**
 to results generated before this switch. `ka`/`kel` are unaffected (they
-don't depend on Vd). Within-subject, paired comparisons (e.g. FCT1 vs. FCT2
-`F`) remain valid on the same logic as before: each subject's own
-Nadler-estimated Vd is used consistently within a visit, and any systematic
-Vd bias still applies to both visits of the same subject (Vd does now
-differ *between* FCT1 and FCT2 if weight changed, exactly as the old flat
-per-kg version also would have).
+don't depend on Vd). Within-subject, paired comparisons (e.g. baseline vs.
+intervention `F`) remain valid on the same logic as before: each subject's
+own Nadler-estimated Vd is used consistently within a visit, and any
+systematic Vd bias still applies to both visits of the same subject (Vd
+does now differ *between* baseline and intervention if weight changed,
+exactly as the old flat per-kg version also would have).
 
 ## Fitting bounds (why these numbers, not others)
 
@@ -294,9 +296,9 @@ subject's plot, not just to drop the flagged curve's own parameter.
 **Trustworthy as (approximately) absolute numbers:**
 - `kel`, `ka` - reasonably well-identified given the bounds and multi-start
   search.
-- Within-subject, paired comparisons (e.g. FCT1 vs. FCT2 `F`) - a
-  systematic Vd bias applies equally to both visits of the same subject and
-  is expected to cancel in a paired comparison.
+- Within-subject, paired comparisons (e.g. baseline vs. intervention `F`) -
+  a systematic Vd bias applies equally to both visits of the same subject
+  and is expected to cancel in a paired comparison.
 - The capsule dissolution half-life (`log(2) / k_release`) - a genuinely new
   quantity this model provides that a single-curve model cannot estimate at
   all.
