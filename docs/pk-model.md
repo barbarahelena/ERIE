@@ -19,8 +19,10 @@ combined dose:
   644.78 µmol, confirmed administered dose; see `docs/data-cleaning-notes.md`
   for the dose discrepancy this project resolved).
 
-Every subject has this pair of curves at both FCT1 (baseline) and FCT2
-(post 4-week diet intervention).
+Every subject has this pair of curves at both FCT1 (coded `baseline`) and
+FCT2 (coded `intervention`, post 4-week diet intervention) - `visit` in the
+cleaned data and everywhere downstream is `baseline`/`intervention`, not the
+raw `FCT1`/`FCT2` labels.
 
 ### What the model is fit to
 
@@ -36,7 +38,7 @@ Every subject has this pair of curves at both FCT1 (baseline) and FCT2
   construction after correction, and 13C6 hasn't been dosed yet; both models
   predict exactly 0 there for any parameters) - but is kept for plotting so
   the observed point still shows.
-- Rows without a body weight (the FCT2 visits of the two study dropouts) are
+- Rows without a body weight (the intervention visits of the two study dropouts) are
   dropped.
 
 ## Model structure
@@ -167,7 +169,7 @@ alongside the selected combination (`results/fit_results.csv`).
 `t_lag`'s upper bound is 150 min - past 180, sampling widens to 60-
 (180->240) and 120-min (240->360) gaps, and a `t_lag` landing in one lets
 the optimizer place an entire invented second wave where no sample can
-confirm or refute it: found on `ER12` FCT2, `t_lag`=179min, `r2_13C6`
+confirm or refute it: found on `ER12` intervention, `t_lag`=179min, `r2_13C6`
 dropped from single_wave's 0.95 to 0.75, a large invented peak with zero
 supporting data around t=200-220.
 
@@ -179,13 +181,13 @@ for everyone) let the optimizer fake an early *onset* delay (small `t_lag`,
 `f_delayed` near 1 - "almost the whole dose is late") in the same
 always-unsampled 0-30min gap, regardless of whether the subject's own data
 gave any reason to believe something was delayed that early: found on
-`ER06` FCT2, which converged to `t_lag`=19.7min, `f_delayed`=0.999 even
+`ER06` intervention, which converged to `t_lag`=19.7min, `f_delayed`=0.999 even
 though its own t=30 sample was already near its peak (~80 mg/L). But a flat
 *high* bound (30 min for everyone) would equally wrongly forbid a genuine
 early delay for a subject whose t=30 really is near 0 - a real,
 separately-observed phenomenon - so the bound is computed per subject
 instead of set once for the whole cohort. Refit with this bound, `ER06`
-FCT2 converged to a qualitatively different, more moderate solution
+intervention converged to a qualitatively different, more moderate solution
 (`t_lag`=35.3min, `f_delayed`=0.320, not just clamped to the new floor with
 the same extreme `f_delayed`), while the genuine-dip subjects (`ER01`,
 `ER09`, whose own t=30 values are also well above `EARLY_LAG_OK_MGL`) were
@@ -198,7 +200,7 @@ floor linearly between 5 and 30 min as t=30 rose between two thresholds
 wrong: no sample exists anywhere between t=0 and t=30, so every value
 strictly between 5 and 30 sits in the same unsampled gap regardless of how
 close t=30 is to either threshold - a "partial" floor is exactly as
-unsupported as the original flat 5 min one. Found on `ER04` FCT1: t=30 =
+unsupported as the original flat 5 min one. Found on `ER04` baseline: t=30 =
 51.4 mg/L (moderately elevated), so the interpolated floor came out to
 21.6 min, and the fit landed *exactly* there, reproducing the same
 unjustified flat-then-rise artifact the bound exists to prevent, just
@@ -255,7 +257,7 @@ but a delay before a *single* wave starts (a standard PK absorption lag
 time). It fires when the curve's first observed point is below 25% of its own
 peak, which is consistent with "nothing had happened yet" rather than an
 ordinary gradual rise. The 25% threshold sits comfortably above both cases it
-was validated against (`ER25` FCT1: 18.4%, `ER06` FCT2: 2.2%).
+was validated against (`ER25` baseline: 18.4%, `ER06` intervention: 2.2%).
 
 ### Choosing between single_wave and two_wave
 
@@ -273,7 +275,7 @@ Two rules override a pure AIC comparison:
   Without it, the 0-60min window has only its t=0/t=60 endpoints to anchor a
   5-parameter fit - under-identified, and AIC would otherwise rubber-stamp
   whatever shape 5 sparse points can fit almost exactly. Found via `ER05`
-  FCT1 (t=30, 90, 150, 240 all missing - only 5 real points for 12C).
+  baseline (t=30, 90, 150, 240 all missing - only 5 real points for 12C).
 - **`two_wave` is never attempted unless 12C's own raw observations show
   EITHER a peak-dip-rise pattern OR a plateau/near-equal peak neighbor.**
   Fitting `two_wave` first and relying on AIC to notice afterward that
@@ -288,14 +290,14 @@ Two rules override a pure AIC comparison:
     curve's own peak is at least 85% of the peak's height - catching two
     waves that overlap closely enough in time to blend into a flat top or
     an irregular rise WITHOUT ever producing a visible dip, which
-    `has_peak_dip_rise()` structurally cannot see. Found via `ER02` FCT1 (a
-    genuine flat top, R² 0.955->0.997), `ER30` FCT1 (an irregular
+    `has_peak_dip_rise()` structurally cannot see. Found via `ER02` baseline (a
+    genuine flat top, R² 0.955->0.997), `ER30` baseline (an irregular
     pre-peak rise, R² 0.859->0.957) - both real, well-bounded improvements
     the dip-only check missed entirely. Deliberately excludes t=30 as a
     valid "near" neighbor: being close to the eventual peak at the very
     first sample just reflects ordinary fast absorption (there's no
     earlier sample to show a different pre-peak trajectory), not
-    evidence of a second wave - found on `ER06` FCT2, whose only "near-peak"
+    evidence of a second wave - found on `ER06` intervention, whose only "near-peak"
     point was t=30, and whose `two_wave` fit consistently pinned `t_lag`
     exactly at its own lower bound rather than settling in the interior
     the way genuine cases do (`ER02`'s 51.5min, `ER30`'s 75.7min) - a sign
@@ -312,7 +314,7 @@ fructose dose) typically pauses and resumes on a tens-of-minutes
 timescale - can compound into a single, smoothly-ACCELERATING rise with no
 down-turn and no near-peak plateau at all, a shape neither detector is
 built to catch (both require the data to already show some sign of
-non-monotonic or blended behavior). Confirmed concretely on `ER21` FCT1:
+non-monotonic or blended behavior). Confirmed concretely on `ER21` baseline:
 raw 12C at t=30/60/90 is 32/61/132 mg/L, a sudden more-than-doubling with
 no down-turn beforehand - `single_wave` R²=0.31, and neither gate fires.
 An unconstrained `two_wave` search (bypassing the gate entirely, for
@@ -329,7 +331,7 @@ is a poor proxy for that whenever a parameter's bounds are deliberately
 wide open relative to its typical fitted value - `ka`/`F_12C` are bounded
 `[1e-4, 1]` (to not bias the research question) even though real values
 sit around 0.01-0.05, making their parscale ~20-100x too large. Confirmed
-concretely on `ER11` FCT1: production's own objective (including its
+concretely on `ER11` baseline: production's own objective (including its
 `MIN_TMAX`/`CMAX` penalties) scored the *reported* fit (`t_lag`=47.3) at
 0.208, while a search using each start's OWN magnitude as parscale found
 0.188 at `t_lag`=120 - which lines up with the actual post-peak dip
@@ -345,7 +347,7 @@ estimate than the global bound width.
 **Removed:** the earlier third rule (never attempt `two_wave` when
 `single_wave` already fits with R² > 0.95) turned out not to be doing the
 actual protective work its rationale implied. It wasn't even the thing
-blocking the two cases above - `ER30` FCT1's `single_wave` R² was 0.846,
+blocking the two cases above - `ER30` baseline's `single_wave` R² was 0.846,
 nowhere near the 0.95 threshold, yet it was still being missed by the
 (then dip-only) raw-data gate, not by this rule. AIC alone, combined with
 the two rules above and the degenerate-fit exploits already bounded out
@@ -360,7 +362,7 @@ much more broadly (both gates above, no R² pre-filter). AICc (the standard
 small-sample correction, `+2k(k+1)/(n-k-1)`) was tried as a fix - but at
 n=8 it raises the complexity gap between k=3 and k=5 from 4 points to 28,
 which is *so* aggressive it re-excluded all three of the confirmed-genuine
-cases above (`ER02`, `ER06` FCT2 in the k_release-fixed sense, `ER30` - all
+cases above (`ER02`, `ER06` intervention in the k_release-fixed sense, `ER30` - all
 lost to `single_wave` under AICc despite large, independently-verified R²
 improvements). Overcorrecting for small n isn't the right lever here; the
 raw-data gates and the bounded-out exploits are what's actually supposed
@@ -377,7 +379,7 @@ shouldn't be allowed to overrule direct evidence in the data. Only a failed
 
 The threshold is well above the 15% detection floor and above `ER01`'s own
 0.40 (a clearly genuine but unremarkable case), chosen from the actual cohort
-distribution: only `ER08` FCT1 (1.57) and `ER11` FCT1 (1.01) clear it, both
+distribution: only `ER08` baseline (1.57) and `ER11` baseline (1.01) clear it, both
 independently confirmed genuine (`ER08`: corroborated by 13C6 peaking at the
 identical timepoint; `ER11`: a clean, sustained dip-then-peak, not a
 single-point spike). It is deliberately conservative - most real dip cases,
@@ -398,7 +400,7 @@ both curves' residuals in one objective, and turned out to be unreliable.
 capsule's dissolution rate); letting the shared lag also be informed by
 13C6's residuals let 13C6's different, `k_release`-explained slow
 onset get misattributed to a "second wave" and imposed onto 12C even when
-12C's own data gave no support for one. Found on `ER32` FCT1 (12C's t=30
+12C's own data gave no support for one. Found on `ER32` baseline (12C's t=30
 sample is already near its eventual peak - no plausible onset delay - yet the
 shared fit pinned `f_delayed`~1, `t_lag`~19 min and made *both* curves' R²
 worse than the plain single_wave model) and `ER35` (same pattern).
@@ -418,7 +420,7 @@ near `t_lag`~90); random log-uniform seeds; the `ka`=`kel` diagonal (see
 "Known limitations"); and **evidence-anchored seeds** at `trigger_time` and
 20 and 40 min before it - the trigger point is where the second wave's
 contribution becomes visibly evident, not necessarily when it started. The
-last family exists because of `ER04` FCT1: without it the search converged
+last family exists because of `ER04` baseline: without it the search converged
 to `t_lag`=21.6 (an early near-total-delay trick with a marginally better
 AIC), missing the genuine t=150 plateau that triggered the attempt.
 
@@ -431,7 +433,7 @@ only the first wave (`f_delayed_13C6` near 0), only the second
 (near 1), or split across both, sharing only `t_lag` (the timing of gastric
 emptying's second wave, a systemic event) with 12C. An earlier version
 forced 13C6 to inherit 12C's `f_delayed` directly, which failed concretely
-on `ER03` FCT1: 12C has two waves (R² = 0.99), but 13C6's own
+on `ER03` baseline: 12C has two waves (R² = 0.99), but 13C6's own
 points show one early peak decaying monotonically with nothing at the time
 the inherited second wave would place one - forcing 12C's fraction onto it
 gave `r2_13C6` = 0.075. The capsule's contents don't have to split across
@@ -446,8 +448,8 @@ combined curve's single global maximum. The old combined-only check
 (`tmax12 <- FINE_T[which.max(fine12)]`) only ever constrained whichever
 wave happened to be taller, leaving the other one's timing completely
 unconstrained - confirmed on real fitted results before this fix: `ER09`
-FCT1/FCT2 (wave 1 taller - combined peak at t=38/33 - but wave 2 ALONE
-peaked at t=151/147, never checked) and `ER16` FCT2 (wave 2 alone peaked at
+baseline/intervention (wave 1 taller - combined peak at t=38/33 - but wave 2 ALONE
+peaked at t=151/147, never checked) and `ER16` intervention (wave 2 alone peaked at
 t=162). This addresses the *lower* floor (a wave's peak landing
 implausibly early); it does not add any *upper* constraint on how late a
 wave's peak can land beyond `t_lag`'s own 150min cap plus however long
@@ -474,13 +476,13 @@ the curve's own peak, not a post-peak deviation), and only kept if it beats
 the no-lag fit on AIC (K=2 vs K=3, computed on 13C6's own residuals, with
 `ka`/`kel` fixed at the joint fit's values - never touches 12C's own
 reported parameters). Validated on the two originally-confirmed subjects
-plus a third found along the way: `ER25` FCT1 (R² 0.71->0.94, `t_lag1_13C6`
-= 25min), `ER06` FCT2 (R² 0.64->0.94, 28min), `ER25` FCT2 (R² ->0.75,
+plus a third found along the way: `ER25` baseline (R² 0.71->0.94, `t_lag1_13C6`
+= 25min), `ER06` intervention (R² 0.64->0.94, 28min), `ER25` intervention (R² ->0.75,
 27min, no prior baseline - not part of the original 2-subject validation).
 
 **Fixed:** the onset-lag candidate no longer carries `k_release` at all.
 It was pinned exactly at its upper bound in all 3 originally-validated
-cases (`ER06` FCT2, `ER25` FCT1, `ER25` FCT2 - 3 for 3, not a coincidence)
+cases (`ER06` intervention, `ER25` baseline, `ER25` intervention - 3 for 3, not a coincidence)
 once `t_lag1_13C6` was in the model - 30min sampling can't distinguish
 "fast dissolution" from "instant" once the delay itself already explains
 the flat start, so it was just an unidentifiable, boundary-pinned nuisance
@@ -502,14 +504,14 @@ cohort-wide scan of the same two detectors against 13C6's own raw data
 flagged 47/68 curves (69%; 12C's own rate is 53/68, 78%) - a high rate for a
 curve with much lower absolute signal and higher relative noise, which is a
 warning sign that the detectors alone are weak evidence for 13C6. Standalone validation before implementing confirmed the concern
-directly: `ER21` FCT1 (the strongest `dip_excess` in the cohort, 3.416)
+directly: `ER21` baseline (the strongest `dip_excess` in the cohort, 3.416)
 "improved" R² 0.508->0.741, but only by pinning `f_delayed2_13C6`=0.999 -
 the same near-total-delay degenerate pattern already distrusted for 12C's
-`t_lag`/`f_delayed` (see the `ER06` FCT2 case in `BOUNDS_LAGGED`'s
+`t_lag`/`f_delayed` (see the `ER06` intervention case in `BOUNDS_LAGGED`'s
 comment) - driven by a late, near-zero crash-then-rebound (0.0117 mg/L at
 t=150, 0.0354 at t=180) that reads as measurement noise, not a real second
-dose. Two other candidates looked genuine by contrast: `ER11` FCT1 (R²
-0.787->0.846, `f_delayed2_13C6`=0.751) and `ER18` FCT2 (R² 0.860->0.879,
+dose. Two other candidates looked genuine by contrast: `ER11` baseline (R²
+0.787->0.846, `f_delayed2_13C6`=0.751) and `ER18` intervention (R² 0.860->0.879,
 `f_delayed2_13C6`=0.095) - both comfortably away from the extremes.
 
 So two safeguards beyond what 12C's own `two_wave` needed are applied
@@ -535,14 +537,14 @@ are now also available when 12C itself is `two_wave`**, not just
 with only `fit_subject_visit_two_wave()`'s stage-2 mechanism
 (`simulate_delayed_release`, sharing 12C's own `t_lag`), which structurally
 cannot represent an onset-delayed or independently-timed 13C6 curve.
-Confirmed broken on `ER23` FCT2: 13C6's own data goes from 0.009 mg/L at
+Confirmed broken on `ER23` intervention: 13C6's own data goes from 0.009 mg/L at
 t=30 to 0.165 at t=60 (5.6% of peak, a textbook onset-lag shape), but with
 12C selected as `two_wave` (correctly, on its own merits), the baseline
 mechanism collapsed to `f_delayed_13C6`=0.001 and r2_13C6=0.35 - not a
 search failure, a structural mismatch no amount of optimization could fix.
 Now all three candidates (baseline K=3, onset-lag K=2, second-wave K=3)
 are compared via AIC on 13C6's own RSS regardless of 12C's own model;
-fixed, `ER23` FCT2 correctly picks up its own onset lag (~27min) and
+fixed, `ER23` intervention correctly picks up its own onset lag (~27min) and
 reaches r2_13C6=0.78.
 
 **Fixed: a boundary-pinned false positive in the second-wave candidate.**
@@ -551,11 +553,11 @@ means the optimizer wants an even smaller delayed fraction than the bound
 allows - i.e. no real second wave at all, the exact degenerate regime that
 bound exists to exclude - so this candidate is now rejected outright
 (not even AIC-compared) whenever that happens, in both branches. Found on
-`ER18` FCT2: won its AIC comparison at `f_delayed2_13C6`=0.05 **and**
+`ER18` intervention: won its AIC comparison at `f_delayed2_13C6`=0.05 **and**
 `t_lag2_13C6`=150 simultaneously (both own bounds, at once) despite the
 curve's genuine dip evidence sitting at t=120, not t=150 - a spurious
 corner-of-the-box "improvement" unrelated to the actual evidence. With the
-guard, `ER18` FCT2 correctly falls back to the baseline mechanism
+guard, `ER18` intervention correctly falls back to the baseline mechanism
 (r2_13C6=0.66, down from the spurious 0.71, but honest).
 
 **Tested but deliberately not adopted (yet):**
@@ -564,7 +566,7 @@ guard, `ER18` FCT2 correctly falls back to the baseline mechanism
   (`t_lag1`), not just the second wave - motivated by curves whose very
   first real sample is already low relative to what follows, suggesting
   absorption itself hadn't started by then (a standard, separate PK concept
-  from the second-wave delay above). On `ER03` FCT1 it matched
+  from the second-wave delay above). On `ER03` baseline it matched
   `former_models/MixedModel`'s historical R² almost exactly (0.71 vs 0.71),
   with `f_delayed` landing near 0 (mostly using the onset lag, not genuine
   two-wave behavior) - but this is n=1, the fit didn't converge, and its
@@ -572,7 +574,7 @@ guard, `ER18` FCT2 correctly falls back to the baseline mechanism
   the same subject. Not enough validation to commit a full-cohort run to it;
   worth revisiting with more subjects and search budget.
 - **Loosening `MIN_TMAX` further** (this version keeps it at 30, unchanged).
-  A sweep on `ER03` FCT1 (30/20/10, keeping the *old* weighted objective)
+  A sweep on `ER03` baseline (30/20/10, keeping the *old* weighted objective)
   showed only modest improvement (R² -0.86 -> -0.67, plateauing at 20 and
   10 - the floor was not the binding constraint once weighting is the real
   problem). Whether loosening it adds anything *on top of* the unweighted
@@ -586,7 +588,7 @@ guard, `ER18` FCT2 correctly falls back to the baseline mechanism
   one-compartment models - "flip-flop" kinetics, where `bateman_conc`'s
   `ka/(ka-kel)` term makes the objective surface narrow/awkward for
   gradient-based search, and generic seeds don't reliably land near it).
-  Confirmed concretely on `ER06` FCT2 (`single_wave`): the pipeline reported
+  Confirmed concretely on `ER06` intervention (`single_wave`): the pipeline reported
   `ka`=0.016, `kel`=0.051, R2=0.945 (neither at a bound), but a direct,
   independently-verified check (multiple `optim()` starts, all converging
   cleanly to the same point) found `ka`=0.023, `kel`=0.025, R2=0.986 -
@@ -603,7 +605,7 @@ guard, `ER18` FCT2 correctly falls back to the baseline mechanism
   an untried alternative.
 - **No upper constraint on how late a wave's own peak can land**, beyond
   `t_lag`'s 150min hard cap - a slow `ka` can still push a wave's actual
-  peak well past `t_lag` itself (e.g. `ER16` FCT2's wave 2 above, `t_lag` =
+  peak well past `t_lag` itself (e.g. `ER16` intervention's wave 2 above, `t_lag` =
   111min but its own peak at t=162min). t=162 itself still falls inside the
   densely-sampled (30min-spaced) 0-180min window, so it's not clearly
   unsupported the way a peak inside the 180-240/240-360min gaps would be -
@@ -656,11 +658,11 @@ model as `F * dose / Vd` (see the identifiability caveat below), a smaller
 Vd at the same observed concentration implies a smaller `F` - so
 `F_12C`/`F_13C6` values from this version are **not directly comparable**
 to results generated before this switch. `ka`/`kel` are unaffected (they
-don't depend on Vd). Within-subject, paired comparisons (e.g. FCT1 vs. FCT2
+don't depend on Vd). Within-subject, paired comparisons (e.g. baseline vs. intervention
 `F`) remain valid on the same logic as before: each subject's own
 Nadler-estimated Vd is used consistently within a visit, and any systematic
 Vd bias still applies to both visits of the same subject (Vd does now
-differ *between* FCT1 and FCT2 if weight changed, exactly as the old flat
+differ *between* baseline and intervention if weight changed, exactly as the old flat
 per-kg version also would have).
 
 ## Fitting bounds (why these numbers, not others)
@@ -722,7 +724,7 @@ defensible fit. Each subject x visit is fit in two stages:
      fixes a real, measured problem *on average*, but it has a specific,
      serious failure mode: it discounts exactly the region an
      informative early feature lives in, by construction (a large predicted
-     value gets a *small* weight). Found via `ER03` FCT1's 13C6 curve, a
+     value gets a *small* weight). Found via `ER03` baseline's 13C6 curve, a
      known-catastrophic fit (R² = -2.18, see "R² can be negative" below) -
      it spikes at t=30 then crashes by t=90, and no amount of loosening
      `MIN_TMAX` fixed it (a sweep from 30 to 10, keeping the weighted
@@ -819,9 +821,9 @@ under-searched.
 ## Fit quality and what to trust
 
 In the current run (`results/fit_results.csv`, 68 subject x visit fits) the
-median R² is 0.975 for the 12C curve (10th percentile 0.916, minimum 0.787)
-and 0.927 for the 13C6 curve (10th percentile 0.761): 40 of the 13C6 fits are
-at or above 0.90, 23 between 0.70 and 0.90, 5 below 0.70, and none below
+median R² is 0.975 for the 12C curve (10th percentile 0.916, minimum 0.784)
+and 0.930 for the 13C6 curve (10th percentile 0.769): 41 of the 13C6 fits are
+at or above 0.90, 23 between 0.70 and 0.90, 4 below 0.70, and none below
 0.30. Per-subject R² is in
 `results/fit_results.csv` - always check it before trusting an
 individual subject's parameters, and inspect that subject's plot in
@@ -835,12 +837,12 @@ other curve's R², or the `ka`/`kel` shared across both, are also
 unreliable - though because `ka`/`kel` are fit jointly, a poor fit on one
 curve can still bias them, so a low flag is a prompt to inspect that
 subject's plot, not just to drop the flagged curve's own parameter. With
-the current run this flags 0/68 fits on `r2_12C` and 5/68 on `r2_13C6`.
+the current run this flags 0/68 fits on `r2_12C` and 4/68 on `r2_13C6`.
 
 **Trustworthy as (approximately) absolute numbers:**
 - `kel`, `ka` - reasonably well-identified given the bounds and multi-start
   search.
-- Within-subject, paired comparisons (e.g. FCT1 vs. FCT2 `F`) - a
+- Within-subject, paired comparisons (e.g. baseline vs. intervention `F`) - a
   systematic Vd bias applies equally to both visits of the same subject and
   is expected to cancel in a paired comparison.
 
@@ -854,6 +856,19 @@ the current run this flags 0/68 fits on `r2_12C` and 5/68 on `r2_13C6`.
   a directly measured individual Vd), which this protocol does not include.
   Report `F` as conditional on the Nadler blood-volume Vd assumption, not
   as a precise absolute bioavailability.
+
+  **Sanity-checking the magnitude under the current Vd:** with Nadler
+  blood-volume Vd, the median `F_12C` and the median `F_13C6` are both ~1.9%
+  in the current run (ranges 0.8-6.8% and 0.4-8.0%). These are low -
+  single-digit percent - and, unlike the earlier flat-ECFV version of this
+  model, have not been checked against a literature fructose/glucose
+  bioavailability figure at a comparable dose. That comparison is worth doing
+  before these numbers go into anything manuscript-facing: if literature
+  values are substantially higher, that is a signal Nadler blood volume
+  specifically (as opposed to ECFV, or some other Vd estimate) may be too
+  small for fructose's actual distribution volume, on top of the
+  already-acknowledged mismatch with this model's own prior physiological
+  reasoning (see "Volume of distribution" above).
 - Any boundary-flagged parameter (`kel_at_bound` or `k_release_at_bound` =
   TRUE in the results table) - even after the adaptive retry above, the data
   may not constrain that parameter away from the bound (e.g.
@@ -898,6 +913,10 @@ Generated by `02_fit_erie_model.R` into `results/` (git-ignored):
   only until it has cleared to 1% of its own peak (`CLEARANCE_FRAC`), for the
   x-axis limit.
 
+- `r2_comparison_vs_former_model.csv`, `r2_comparison_summary.csv`,
+  `r2_comparison_plot.pdf` - written by `04_compare_to_former_model.R`, see
+  "R² compared with the former model" below.
+
 `t30_present` is a property of the data, not of which model won: without the
 t=30 sample `ka` is poorly anchored even under `single_wave`, so downstream
 reliability filtering should take it into account alongside the R²,
@@ -936,6 +955,27 @@ What's different in this version:
   blood volume) rather than a flat 0.15 L/kg ECFV assumption applied to
   every subject - see "Volume of distribution" above for what this changes
   and why it isn't a straightforward improvement.
+
+### R² compared with the former model
+
+`scripts/04_compare_to_former_model.R` (`pixi run compare-former`) compares
+each subject x visit's classical R² (`1 - SSE/SS_tot` on the observed points)
+with the former model's saved results
+(`former_models/MixedModel/Results/fit_results_joint.csv`). In the current
+run the median 12C R² is 0.975 (former: 0.933), higher for 57 of 68 subject x
+visits and lower for 11; the median 13C6 R² is 0.930 (former: 0.793), higher
+for 58 and lower for 10. Per-subject numbers are in
+`results/r2_comparison_vs_former_model.csv`, the summary in
+`results/r2_comparison_summary.csv`, and a scatter plot in
+`results/r2_comparison_plot.pdf`. The correlation between former and current
+R² across subject x visits is modest (0.37 for both isotopes).
+
+R² is a fair yardstick between the two: this version's objective is
+unweighted and normalized by each curve's own total variance, like the former
+model's, so both optimize essentially the quantity R² measures. A higher R²
+is not evidence on its own that the model is better, though: `two_wave` and
+13C6's onset-lag and second-wave mechanisms add parameters, and R² does not
+penalize that (the AIC-based selection does, for 12C).
 
 ## References
 

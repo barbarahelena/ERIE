@@ -67,7 +67,7 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 # Plot labels
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
 ISOTOPE_COLORS <- c("12C" = "steelblue", "13C6" = "firebrick")
-VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
+VISIT_LABELS   <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
 
 # Config
 MIN_TMAX    <- 30     # min - soft floor on predicted Tmax for both curves - see file header
@@ -382,7 +382,7 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
   plateau_evidence <- has_near_peak_neighbor(obs12$time_min, obs12$conc_mgL)
   # A third path in: single_wave fitting 12C very poorly (R2 below
   # R2_ALWAYS_TRY_TWO_WAVE) also triggers an attempt, to catch smoothly
-  # accelerating rises neither detector sees (ER21 FCT1). Set well below
+  # accelerating rises neither detector sees (ER21 baseline). Set well below
   # R2_RELIABLE_MIN so it only fires when single_wave doesn't fit at all.
   R2_ALWAYS_TRY_TWO_WAVE <- 0.50
   poor_single_wave <- !is.na(single_wave_r2_12C) && single_wave_r2_12C < R2_ALWAYS_TRY_TWO_WAVE
@@ -437,7 +437,7 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
   )
   # Seeds anchored on the evidence that justified trying two_wave
   # (dip_evidence$trigger_time), at and before it: generic seeds can land on an
-  # unrelated near-total-delay optimum instead (ER04 FCT1; see "Two-stage fit"
+  # unrelated near-total-delay optimum instead (ER04 baseline; see "Two-stage fit"
   # in docs/pk-model.md).
   evidence_seeds <- if (!is.na(dip_evidence$trigger_time)) {
     tt <- dip_evidence$trigger_time
@@ -517,7 +517,7 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
 
   # 13C6's own onset-lag and second-wave candidates, as in
   # fit_subject_visit_single_wave(), so 13C6's mechanism doesn't depend on
-  # 12C's model (ER23 FCT2 needed this). All three candidates (baseline K=3,
+  # 12C's model (ER23 intervention needed this). All three candidates (baseline K=3,
   # onset-lag K=2, second-wave K=3) are compared by AIC on 13C6's own RSS.
   n13 <- length(obs13$conc_mgL)
   best_aic13 <- n13 * log(fit13$value / n13) + 2 * 3   # baseline: F_13C6/k_release/f_delayed_13C6, K=3

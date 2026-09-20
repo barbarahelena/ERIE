@@ -55,10 +55,10 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 
 # Plot labels: readable names and consistent colors.
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
-VISIT_LABELS   <- c(FCT1 = "FCT1 (before diet)", FCT2 = "FCT2 (after diet)")
+VISIT_LABELS   <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
 DIET_LABELS    <- c(low_fructose = "Low fructose diet", high_fructose = "High fructose diet")
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
-VISIT_COLORS   <- c(FCT1 = "#4477AA", FCT2 = "#CC6677")
+VISIT_COLORS   <- c(baseline = "#4477AA", intervention = "#CC6677")
 FINE_T_DIET <- seq(0, 400, by = 2)
 # Inclusion cutoff for this script's plots/statistics - separate from, and
 # stricter than, 02_fit_erie_model.R's R2_RELIABLE_MIN (see "Which fits are
@@ -161,7 +161,7 @@ print(as.data.frame(param_table), digits = 3)
 
 # ---- Statistical comparison: diet x time linear mixed models --------------
 # One LMM per parameter on reliable fits, with subject_id as a random
-# intercept for the paired FCT1/FCT2 observations. See "Linear mixed models" in
+# intercept for the paired baseline/intervention observations. See "Linear mixed models" in
 # docs/diet-summary.md.
 
 # Modelled on the log scale, with sex as a fixed-effect covariate (rationale in
@@ -228,7 +228,7 @@ for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
 cat("Saved results/diet_lmm_results.csv\n")
 
 # ---- Delta plots: within-subject before/after diet change, by diet arm ----
-# Per-subject log fold-change (log(FCT2) - log(FCT1)) for subjects with both
+# Per-subject log fold-change (log(intervention) - log(baseline)) for subjects with both
 # visits reliable, compared between arms with a Wilcoxon rank-sum test. See
 # "Within-subject change (delta)" in docs/diet-summary.md.
 
@@ -236,8 +236,8 @@ delta_param <- function(param) {
   fits %>% filter(reliable) %>%
     select(subject_id, diet, visit, value = all_of(param)) %>%
     pivot_wider(names_from = visit, values_from = value) %>%
-    filter(!is.na(FCT1), !is.na(FCT2)) %>%
-    transmute(subject_id, diet, parameter = param, delta = log(FCT2) - log(FCT1))
+    filter(!is.na(baseline), !is.na(intervention)) %>%
+    transmute(subject_id, diet, parameter = param, delta = log(intervention) - log(baseline))
 }
 
 delta_data <- bind_rows(
@@ -257,18 +257,18 @@ p_delta <- ggplot(delta_data, aes(diet, delta, fill = diet)) +
   scale_x_discrete(labels = DIET_LABELS) +
   scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
   scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-  labs(title = "Within-subject diet change (log fold-change, FCT2 vs FCT1) by diet arm",
-       x = NULL, y = "log(FCT2 / FCT1)") +
+  labs(title = "Within-subject diet change (log fold-change, intervention vs baseline) by diet arm",
+       x = NULL, y = "log(intervention / baseline)") +
   theme_Publication()
 
 ggsave("results/diet_parameter_delta_boxplot.pdf", p_delta, width = 11, height = 7, dpi = 150)
 cat("\nSaved results/diet_parameter_delta_boxplot.pdf and results/diet_parameter_deltas.csv\n")
 
-# ---- FCT1 vs FCT2 ("before/after") WITHIN each diet arm --------------------
+# ---- baseline vs intervention ("before/after") WITHIN each diet arm --------------------
 # Paired Wilcoxon signed-rank test (a one-sample Wilcoxon of each subject's
 # delta against 0), computed explicitly rather than via ggpubr's pairing
 # detection. The boxplot shows every reliable value, so its n differs from the
-# test's n. See "FCT1 vs FCT2 within each arm" in docs/diet-summary.md.
+# test's n. See "baseline vs intervention within each arm" in docs/diet-summary.md.
 before_after_p <- box_data %>%
   group_by(parameter, diet) %>%
   summarise(y.position = max(value, na.rm = TRUE) * 1.08, .groups = "drop") %>%
@@ -279,7 +279,7 @@ before_after_p <- box_data %>%
                 .groups = "drop"),
     by = c("parameter", "diet")
   ) %>%
-  mutate(group1 = "FCT1", group2 = "FCT2",
+  mutate(group1 = "baseline", group2 = "intervention",
          label = if_else(is.na(p), sprintf("n=%d", n_paired), sprintf("p=%.3f (n=%d)", p, n_paired)))
 
 write_csv(before_after_p, "results/diet_before_after_wilcoxon.csv")
@@ -296,7 +296,7 @@ plot_before_after <- function(param_name) {
     facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
     scale_x_discrete(labels = VISIT_LABELS) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
-    labs(title = sprintf("%s: FCT1 vs FCT2 within each diet arm (paired Wilcoxon)", PARAM_LABELS[[param_name]]),
+    labs(title = sprintf("%s: baseline vs intervention within each diet arm (paired Wilcoxon)", PARAM_LABELS[[param_name]]),
          x = NULL, y = NULL) +
     theme_Publication()
 }
@@ -400,10 +400,10 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
   )
 }
 
-# Faceted by diet arm with FCT1/FCT2 overlaid by colour, one PDF per isotope
+# Faceted by diet arm with baseline/intervention overlaid by colour, one PDF per isotope
 # (12C and 13C6 differ ~1000x in concentration).
 plot_diet_curves <- function(isotope_val) {
-  curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("FCT1", "FCT2")) %>%
+  curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("baseline", "intervention")) %>%
     pmap_dfr(function(diet, visit) {
       ac <- average_curve_isotope(diet, visit, isotope_val)
       if (is.null(ac)) return(NULL)
@@ -417,7 +417,7 @@ plot_diet_curves <- function(isotope_val) {
     facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
     scale_color_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
-    labs(title = sprintf("Mean %s concentration: FCT1 vs FCT2 within each diet arm", ISOTOPE_LABELS[[isotope_val]]),
+    labs(title = sprintf("Mean %s concentration: baseline vs intervention within each diet arm", ISOTOPE_LABELS[[isotope_val]]),
          x = "Time (min)", y = "Concentration (mg/L)") +
     theme_Publication()
 }

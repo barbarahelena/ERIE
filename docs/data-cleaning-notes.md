@@ -52,6 +52,11 @@ is that every (subject, visit, time) point in one isotope file also exists in
 the other - both are drawn from the same blood samples - which raises a
 `warning()` otherwise.
 
+Once resolved to `FCT1`/`FCT2`, the value is recoded to `baseline`/
+`intervention` - that's the coded `visit` value used everywhere downstream
+(`erie_concentrations.csv`, `erie_covariates.csv`, and every script that
+reads them). `FCT1`/`FCT2` stays raw-file vocabulary only.
+
 ## Inconsistent decimal marks across files
 
 `ERIE_fructose_12C.csv` and `ERIE_constants.csv` use comma decimals (e.g.
@@ -137,17 +142,17 @@ established.
 
 ## Known missingness
 
-- **ER33 and ER34 have no FCT2 data at all** (body weight, both fructose
+- **ER33 and ER34 have no intervention data at all** (body weight, both fructose
   curves) - both are documented study dropouts, consistent with the
   manuscript ("35 participants completing the study compared with the
   intended 40" and per-subject attrition described in Fig. 1). This is
-  expected, not a data error. Their FCT1 weight is deliberately *not*
-  carried forward to fill the missing FCT2 `bw_kg` - both subjects also
-  have no FCT2 concentration data at all, so a filled-in weight would never
+  expected, not a data error. Their baseline weight is deliberately *not*
+  carried forward to fill the missing intervention `bw_kg` - both subjects also
+  have no intervention concentration data at all, so a filled-in weight would never
   be used by anything, and leaving it `NA` is a more honest reflection of
-  what's actually known about their FCT2 visit.
-- Two 13C6 concentration values are slightly negative (ER06 FCT2 t=360:
-  -0.0011 µmol/L; ER27 FCT2 t=240: -0.0172 µmol/L). Both are small in
+  what's actually known about their intervention visit.
+- Two 13C6 concentration values are slightly negative (ER06 intervention t=360:
+  -0.0011 µmol/L; ER27 intervention t=240: -0.0172 µmol/L). Both are small in
   magnitude, at late timepoints where true tracer concentration is near
   zero, and consistent with ordinary assay noise near the limit of
   detection rather than a data-entry error. They are left as-is in the
@@ -160,11 +165,12 @@ established.
 previously unused by this pipeline) gives one row per subject: `Diet` = `A`
 or `B`. Diet A is low fructose, with calories matched by glucose
 supplementation; Diet B is high fructose. This is a subject-level
-assignment, fixed across FCT1/FCT2 (the diet intervention happens *between*
-the two visits, not during them), so it's joined into `erie_covariates.csv`
-by `subject_id` alone, not `subject_id + visit`. Used by
-`scripts/03_diet_summary.R` for the diet-arm comparison plot and parameter
-table; the PK fitting itself (`02_fit_erie_model.R`) doesn't need it.
+assignment, fixed across baseline/intervention (the diet intervention
+happens *between* the two visits, not during them), so it's joined into
+`erie_covariates.csv` by `subject_id` alone, not `subject_id + visit`. Used
+by `scripts/03_diet_summary.R` for the diet-arm comparisons (see
+`docs/diet-summary.md`); the PK fitting itself (`02_fit_erie_model.R`)
+doesn't need it.
 
 ## Output files
 
