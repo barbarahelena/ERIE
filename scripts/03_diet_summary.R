@@ -80,11 +80,6 @@ fits <- fits %>%
   mutate(
     Vd = nadler_blood_volume(bw_kg, height_cm, sex),
     dose_12C_mg = 1000 * bw_kg,
-    # bw_kg (and so BMI) is per subject x VISIT, not fixed per subject - it
-    # does shift a little between FCT1/FCT2 for several subjects (e.g. a
-    # diet-driven weight change), so this is computed per row rather than
-    # averaged/fixed per subject.
-    bmi = bw_kg / (height_cm / 100)^2,
     # Reliability gated on the 12C fit only: it isn't stuck at the shared
     # kel bound, and its own R2 clears R2_INCLUDE_MIN. Applied uniformly to
     # every parameter (including F_13C6/capsule dissolution) rather than
@@ -212,25 +207,23 @@ print(as.data.frame(param_table), digits = 3)
 # a fold-change rather than an absolute difference, which is the more
 # natural scale for a rate constant.
 #
-# Adjusted for sex and BMI as fixed-effect covariates - both plausibly
-# affect absorption/clearance/Vd-related parameters independent of diet
-# (sex is already built into Vd itself via nadler_blood_volume(), but not
-# into ka/kel/F, which are fit independent of Vd), so including them here
-# lets the diet/visit effect be read net of that variation rather than
-# having it inflate the residual/subject-level noise the model would
-# otherwise attribute to diet or visit. BMI (not raw bw_kg) since it's the
-# more standard adiposity/body-composition covariate and largely orthogonal
-# to sex, rather than partially redundant with it.
+# Adjusted for sex as a fixed-effect covariate - plausibly affects
+# absorption/clearance/F independent of diet (sex is already built into Vd
+# itself via nadler_blood_volume(), but not into ka/kel/F, which are fit
+# independent of Vd), so including it here lets the diet/visit effect be
+# read net of that variation rather than having it inflate the
+# residual/subject-level noise the model would otherwise attribute to diet
+# or visit. (BMI tried too, dropped - not included here.)
 fit_lmm <- function(param, log_transform = TRUE) {
   d <- fits %>% filter(reliable) %>%
-    select(subject_id, diet, visit, sex, bmi, value = all_of(param))
+    select(subject_id, diet, visit, sex, value = all_of(param))
   if (log_transform) d <- d %>% mutate(value = log(value))
   n_subjects_both <- d %>% count(subject_id) %>% filter(n == 2) %>% nrow()
   if (n_subjects_both < 3) {
     warning(param, ": fewer than 3 subjects with both visits reliable - skipping LMM")
     return(NULL)
   }
-  model <- lmer(value ~ diet * visit + sex + bmi + (1 | subject_id), data = d)
+  model <- lmer(value ~ diet * visit + sex + (1 | subject_id), data = d)
   a <- anova(model)  # Type III, Satterthwaite df (lmerTest default)
   tibble(parameter = param, scale = if (log_transform) "log" else "raw",
          term = rownames(a), `F` = a$`F value`, df1 = a$NumDF, df2 = a$DenDF, p = a$`Pr(>F)`)
