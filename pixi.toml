@@ -11,6 +11,7 @@ fit-model = "Rscript scripts/02_fit_erie_model.R"
 diet-summary = "Rscript scripts/03_diet_summary.R"
 pipeline = { depends-on = ["clean-data", "fit-model", "diet-summary"] }
 test-engine = "Rscript scripts/assets/tests.R"
+compare-former = "Rscript scripts/04_compare_to_former_model.R"
 
 [dependencies]
 r-base = ">=4.5.3,<4.6"
