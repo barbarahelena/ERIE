@@ -62,7 +62,7 @@ FINE_T_DIET <- seq(0, 400, by = 2)
 # retry logic, not for whether it belongs in a diet-arm summary. 0.85 of
 # 68 cohort fits currently drops 5 (r2_12C in 0.79-0.84), none of them
 # otherwise kel-bound.
-R2_INCLUDE_MIN <- 0.85
+R2_INCLUDE_MIN <- 0.9
 
 # Open data
 results      <- read_csv("results/fit_results.csv", show_col_types = FALSE)
@@ -180,8 +180,7 @@ param_table <- bind_rows(
   summarise_param("ka"),
   summarise_param("kel"),
   summarise_param("F_12C"),
-  summarise_param("F_13C6"),
-  summarise_param("capsule_dissolution_halflife_min")
+  summarise_param("F_13C6")
 ) %>% arrange(parameter, diet, visit)
 
 dir.create("results", showWarnings = FALSE)
@@ -224,8 +223,7 @@ lmm_results <- bind_rows(
   fit_lmm("ka"),
   fit_lmm("kel"),
   fit_lmm("F_12C"),
-  fit_lmm("F_13C6"),
-  fit_lmm("capsule_dissolution_halflife_min")
+  fit_lmm("F_13C6")
 )
 
 write_csv(lmm_results, "results/diet_lmm_results.csv")
@@ -233,16 +231,22 @@ cat("\n=== LMM (diet x visit, subject random intercept): F-tests ===\n")
 print(as.data.frame(lmm_results), digits = 3)
 
 # ---- Boxplot: diet x visit distributions for each parameter ---------------
-PARAM_LABELS <- c(ka = "ka (1/min)", kel = "kel (1/min)", F_12C = "F[12C]", F_13C6 = "F[13C6]",
-                   capsule_dissolution_halflife_min = "Capsule t1/2 (min)")
+# capsule_dissolution_halflife_min deliberately excluded from all of this
+# script's summaries/plots: it only exists (k_release is only fit) for
+# subjects whose 13C6 curve still uses the original gradual-dissolution
+# mechanism - 9 of 68 fits in the latest full cohort run, the rest now use
+# the onset-lag or independent-second-wave mechanisms added this session,
+# which model 13C6 as an instant bolus with no capsule-release step at
+# all. Too small and too non-random a subset (it's exactly the "still
+# explained by the old, simpler mechanism" group) to summarize
+# meaningfully here.
+PARAM_LABELS <- c(ka = "ka (1/min)", kel = "kel (1/min)", F_12C = "F[12C]", F_13C6 = "F[13C6]")
 
 box_data <- bind_rows(
   fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "ka", value = ka),
   fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "kel", value = kel),
   fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_12C", value = F_12C),
-  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_13C6", value = F_13C6),
-  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "capsule_dissolution_halflife_min",
-                                           value = capsule_dissolution_halflife_min)
+  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_13C6", value = F_13C6)
 )
 
 p_box <- ggplot(box_data, aes(visit, value, fill = diet)) +
@@ -281,7 +285,7 @@ delta_param <- function(param) {
 
 delta_data <- bind_rows(
   delta_param("ka"), delta_param("kel"), delta_param("F_12C"),
-  delta_param("F_13C6"), delta_param("capsule_dissolution_halflife_min")
+  delta_param("F_13C6")
 )
 
 write_csv(delta_data, "results/diet_parameter_deltas.csv")
