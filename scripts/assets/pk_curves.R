@@ -81,7 +81,7 @@ delayed_release_ode <- function(t, state, parms) {
 
 #' Simulate a delayed-release oral model at a set of times
 #'
-#' Numerical integration is used deliberately instead of a closed-form
+#' Numerical integration is used instead of a closed-form
 #' sum-of-exponentials solution: the closed form has removable singularities
 #' whenever any two of (ka, kel, k_release) are close to equal, and a
 #' hand-derived version was found to have real, sometimes large, errors near
@@ -268,7 +268,7 @@ simulate_lagged_dose <- function(simulate_fn, times, dose, f_delayed, t_lag) {
 #' than the first wave's by construction - avoids the label-switching
 #' ambiguity of fitting two independent, unordered lag times). Setting
 #' `f_delayed` near 0 recovers a single-wave curve that still has its own
-#' fittable onset lag (`t_lag1`) - deliberately so: an onset lag can be real
+#' fittable onset lag (`t_lag1`), because an onset lag can be real
 #' even for a subject with no second wave at all, and shouldn't require one
 #' to be present to be fit.
 #'

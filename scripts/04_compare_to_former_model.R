@@ -2,8 +2,9 @@
 # model's saved results (former_models/MixedModel/Scripts/
 # fructose_joint_model_final.R output). Same subjects, same visits, same R2
 # definition (1 - SSE/SS_tot on the observed points) - different Vd,
-# weighting, and fitting procedure (see "Continuity with prior work" and
-# "Volume of distribution" in docs/pk-model.md for what changed and why).
+# objective, and fitting procedure (see "Origin of the model" and "Volume of
+# distribution" in docs/pk-model.md and docs/problems-and-fixes.md for what
+# changed and why).
 # This is a check on how those changes affected fit quality, not a claim
 # that either model's R2 is "the truth."
 # Barbara Verhaar

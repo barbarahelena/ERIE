@@ -102,7 +102,7 @@ check("string_seed() gives distinct seeds for all 70 ERIE subject x visit keys",
 
 # ---- fit_multistart(): recovers the true CURVE from noiseless synthetic data
 #
-# Deliberately checks curve fit, not exact parameter recovery: the
+# Checks curve fit, not exact parameter recovery: the
 # one-compartment oral model has an exact "flip-flop" identifiability twin
 # - (ka, kel, F) and (kel, ka, F*ka/kel) produce IDENTICAL concentration
 # curves (verified directly: with wide, symmetric ka/kel bounds, this test

@@ -81,8 +81,8 @@ fits <- fits %>%
     Vd = nadler_blood_volume(bw_kg, height_cm, sex),
     dose_12C_mg = 1000 * bw_kg,
     # Reliable = 12C's fit isn't stuck at the shared kel bound and its R2 clears
-    # R2_INCLUDE_MIN, applied to every parameter. `converged` is deliberately
-    # not required. See "Which fits are included" in docs/diet-summary.md.
+    # R2_INCLUDE_MIN, applied to every parameter. `converged` is not
+    # required. See "Which fits are included" in docs/diet-summary.md.
     reliable = !kel_at_bound & r2_12C >= R2_INCLUDE_MIN
   )
 
@@ -107,7 +107,7 @@ ggsave("results/diet_vd_boxplot.pdf", p_vd, width = 6, height = 5, dpi = 150)
 cat("\nSaved results/diet_vd_boxplot.pdf\n")
 
 # ---- Fit quality (R2) by diet arm and visit --------------------------------
-# Deliberately not gated on `reliable` (which filters on r2_12C itself): a
+# Not gated on `reliable` (which filters on r2_12C itself): a
 # whole-cohort QC view. See "Outputs" in docs/diet-summary.md.
 R2_RELIABLE_MIN <- 0.70   # matches 02_fit_erie_model.R's own threshold
 
