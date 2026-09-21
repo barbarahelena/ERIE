@@ -72,13 +72,13 @@ constants    <- read_csv("data/processed/erie_constants.csv", show_col_types = F
 dose_13C6_mg <- constants$value[constants$constant == "tracer_13C6_dose_mg"]
 
 fits <- results %>%
-  left_join(covariates %>% select(subject_id, visit, bw_kg, height_cm, sex, diet), by = c("subject_id", "visit")) %>%
+  left_join(covariates %>% select(subject_id, visit, bw_kg, height_cm, age_years, sex, diet), by = c("subject_id", "visit")) %>%
   filter(!is.na(ka))
 
 fits <- fits %>%
   filter(!is.na(diet)) %>%
   mutate(
-    Vd = nadler_blood_volume(bw_kg, height_cm, sex),
+    Vd = watson_ecf_volume(bw_kg, height_cm, age_years, sex),
     dose_12C_mg = 1000 * bw_kg,
     # Reliable = 12C's fit isn't stuck at the shared kel bound and its R2 clears
     # R2_INCLUDE_MIN, applied to every parameter. `converged` is not
@@ -87,7 +87,7 @@ fits <- fits %>%
   )
 
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
-# Vd is a deterministic function of weight/height/sex, not a fit result, so it
+# Vd is a deterministic function of weight/height/age/sex, not a fit result, so it
 # isn't gated on `reliable` and is shown once per subject (mean over visits) as
 # a covariate-balance check. See "Outputs" in docs/diet-summary.md.
 
@@ -99,7 +99,7 @@ p_vd <- ggplot(vd_data, aes(diet, Vd, fill = diet)) +
   geom_jitter(aes(shape = sex), width = 0.08, size = 1.8, alpha = 0.8) +
   scale_x_discrete(labels = DIET_LABELS) +
   scale_fill_manual(values = DIET_COLORS, guide = "none") +
-  labs(title = "Nadler-estimated blood volume (Vd) by diet arm",
+  labs(title = "Watson-estimated extracellular fluid volume (Vd) by diet arm",
        x = NULL, y = "Vd (L)", shape = "Sex") +
   theme_Publication()
 

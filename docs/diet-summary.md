@@ -15,7 +15,7 @@ A subject x visit counts as `reliable` when 12C's fit is not stuck at the shared
 ## Outputs
 
 Two plots use all fitted subjects, without the `reliable` filter:
-- **Vd by diet arm** (`diet_vd_boxplot.pdf`). Vd is a deterministic function of each subject's weight, height and sex (Nadler; see "Volume of distribution" in `docs/pk-model.md`) and has no fit of its own, so a PK fit's R² has no bearing on it. It is shown once per subject (mean over the visits present), since weight rarely changes meaningfully within the study. It works as a covariate-balance check: it should cluster by sex and be similar between arms if randomization worked.
+- **Vd by diet arm** (`diet_vd_boxplot.pdf`). Vd is a deterministic function of each subject's weight, height, age and sex (Watson ECF; see "Volume of distribution" in `docs/pk-model.md`) and has no fit of its own, so a PK fit's R² has no bearing on it. It is shown once per subject (mean over the visits present), since weight rarely changes meaningfully within the study. It works as a covariate-balance check: it should cluster by sex and be similar between arms if randomization worked.
 - **Fit quality (R²) by diet arm and visit** (`diet_r2_boxplot.pdf`). This is a QC view of the whole cohort; `reliable` excludes on R², so filtering by it would hide exactly the poor fits the plot exists to show. The dashed line is `R2_RELIABLE_MIN`.
 
 Everything else covers `ka`, `kel`, `F_12C` and `F_13C6`:
@@ -37,7 +37,7 @@ The per-parameter PDFs are faceted by diet arm and coloured by visit, so the bas
 One LMM per parameter: `log(value) ~ diet * visit + sex + (1 | subject_id)`, with Type III F-tests and Satterthwaite degrees of freedom (the `lmerTest` default). The random intercept is there because each subject contributes a paired baseline/intervention observation. `lmer` handles the unbalanced design (some subjects have only one reliable visit), which a paired t-test cannot. A parameter is skipped, with a warning, if fewer than 3 subjects have both visits reliable.
 
 - **Log scale.** `ka`, `kel` and the `F` values are positive, multiplicative-scale quantities, conventionally treated as log-normal in PK work. Log-transforming makes the normal-residuals assumption more defensible and turns a diet effect into a fold-change, the more natural scale for a rate constant. The raw scale was run alongside it and log was consistently the better-behaved fit, so the raw-scale model was dropped.
-- **Sex as a covariate.** Sex plausibly affects absorption, clearance and `F` independent of diet. It is already built into Vd via Nadler, but `ka`, `kel` and `F` are fit independent of Vd, so including it lets the diet/visit effect be read net of that variation. BMI was tried as well and dropped.
+- **Sex as a covariate.** Sex plausibly affects absorption, clearance and `F` independent of diet. It is already built into Vd via Watson, but `ka`, `kel` and `F` are fit independent of Vd, so including it lets the diet/visit effect be read net of that variation. BMI was tried as well and dropped.
 
 ### Within-subject change (delta)
 

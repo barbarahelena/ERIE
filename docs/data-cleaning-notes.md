@@ -39,9 +39,13 @@ Once resolved to `FCT1`/`FCT2`, the value is recoded to `baseline`/ `interventio
 
 ## Weight and height: `weight_height_data_ERIE.csv`
 
-This file replaces `ERIE_weight.csv` (which stays in `data/` and is read by no script). It has one row per subject with `dem_height` (cm, constant across visits), `fct1_gewicht` and `fct2_gewicht` (kg, one column per visit), and the height is needed for the weight+height-based Vd formula in `scripts/assets/pk_curves.R` (see "Volume of distribution" in `docs/pk-model.md`).
+This file replaces `ERIE_weight.csv` (which stays in `data/` and is read by no script). It has one row per subject with `dem_height` (cm, constant across visits), `fct1_gewicht` and `fct2_gewicht` (kg, one column per visit), and the height is needed for the weight, height and age-based Vd formula in `scripts/assets/pk_curves.R` (see "Volume of distribution" in `docs/pk-model.md`).
 
 `fct2_gewicht` is double-quoted in the raw CSV (`fct1_gewicht` is unquoted) for no apparent reason, including `""` for ER33/ER34's missing FCT2 weight. `readr::read_csv()` infers the column as numeric (quoting in CSV only escapes delimiters) and turns `""` into `NA`, so no special handling is needed.
+
+## Age: `Age_df.csv`
+
+Watson's equation for men uses age (see "Volume of distribution" in `docs/pk-model.md`). `Age_df.csv` has one row per subject (`Subject_ID` with 3-digit IDs like the sex file, and `Age_screening` in years) and covers all 35 subjects. It is the age at screening, not at each fructose challenge, and it is used unchanged for both visits.
 
 ## The 13C6 tracer dose discrepancy
 

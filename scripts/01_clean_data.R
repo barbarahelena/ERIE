@@ -94,6 +94,15 @@ sex <- read_csv(file.path(raw_dir, "ERIE_metadata_sex.csv"), show_col_types = FA
   )
 
 # =============================================================================
+# 3b. Age (Watson's male equation needs it; see "Volume of distribution" in docs/pk-model.md)
+# =============================================================================
+age <- read_csv(file.path(raw_dir, "Age_df.csv"), show_col_types = FALSE) %>%
+  transmute(
+    subject_id = sprintf("ER%02d", as.integer(str_extract(Subject_ID, "\\d+$"))),
+    age_years = Age_screening
+  )
+
+# =============================================================================
 # 4. Diets: Diet A -> low_fructose (calorie suppl w/ gluc), B -> high_fructose
 # =============================================================================
 diet_raw <- read_xlsx(file.path(raw_dir, "ERIE_Diets.xlsx"))
@@ -132,6 +141,7 @@ write_csv(constants, file.path(out_dir, "erie_constants.csv"))
 
 covariates <- bodyweights %>%
   left_join(sex, by = "subject_id") %>%
+  left_join(age, by = "subject_id") %>%
   left_join(diet, by = "subject_id") %>%
   left_join(heights, by = "subject_id") %>%
   mutate(

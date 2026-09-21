@@ -201,7 +201,7 @@ fit_subject_visit_single_wave <- function(sid, vis, extra_seeds = list(), maxit 
   if (nrow(obs12) < 3 || nrow(obs13) < 3) return(empty)
 
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
-  Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
+  Vd <- watson_ecf_volume(cov$bw_kg, cov$height_cm, cov$age_years, cov$sex)
   dose_12C <- cov$dose_12C_mg
 
   pre12 <- fit_curve_independent(obs12$time_min, obs12$conc_mgL, dose_12C, Vd)
@@ -389,7 +389,7 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
   if (!dip_evidence$detected && !plateau_evidence && !poor_single_wave) return(mutate(empty, t30_present = TRUE))
 
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
-  Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
+  Vd <- watson_ecf_volume(cov$bw_kg, cov$height_cm, cov$age_years, cov$sex)
   dose_12C <- cov$dose_12C_mg
 
   # ---- Stage 1: ka, kel, f_delayed, t_lag, F_12C from 12C alone ----
@@ -766,7 +766,7 @@ write_csv(results, "results/fit_results.csv")
 # docs/pk-model.md.
 simulate_fit <- function(sid, vis, r) {
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
-  Vd <- nadler_blood_volume(cov$bw_kg, cov$height_cm, cov$sex)
+  Vd <- watson_ecf_volume(cov$bw_kg, cov$height_cm, cov$age_years, cov$sex)
   dose_12C <- cov$dose_12C_mg
   fine <- seq(0, 400, length.out = 400)
 
