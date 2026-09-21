@@ -11,6 +11,8 @@ suppressMessages({
   library(grid)
   library(ggthemes)
   library(stringr)
+  library(lmerTest)
+  library(ggpubr)
 })
 
 # Get functions
@@ -49,14 +51,22 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 }
 
 # Plot labels: readable names and consistent colors.
-ISOTOPE_LABELS <- c("12C" = "Fructose 12C (unlabelled)", "13C6" = "Fructose 13C6 (labelled)")
+ISOTOPE_LABELS <- c("12C" = "Fructose 12C", "13C6" = "Fructose 13C6")
 VISIT_LABELS   <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
-DIET_LABELS    <- c(low_fructose = "Diet A: low fructose", high_fructose = "Diet B: high fructose")
+DIET_LABELS    <- c(low_fructose = "Low fructose diet", high_fructose = "High fructose diet")
 DIET_COLORS    <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
+VISIT_COLORS   <- c(baseline = "#4477AA", intervention = "#CC6677")
 FINE_T_DIET <- seq(0, 400, by = 2)
+# Cutoff for inclusion in this script's plots/statistics - deliberately
+# separate from (and stricter than) 02_fit_erie_model.R's own
+# R2_RELIABLE_MIN (0.70), which just flags a fit for that pipeline's own
+# retry logic, not for whether it belongs in a diet-arm summary. 0.85 of
+# 68 cohort fits currently drops 5 (r2_12C in 0.79-0.84), none of them
+# otherwise kel-bound.
+R2_INCLUDE_MIN <- 0.9
 
 # Open data
-results      <- read_csv("results/fit_results_joint.csv", show_col_types = FALSE)
+results      <- read_csv("results/fit_results.csv", show_col_types = FALSE)
 covariates   <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE)
 constants    <- read_csv("data/processed/erie_constants.csv", show_col_types = FALSE)
 dose_13C6_mg <- constants$value[constants$constant == "tracer_13C6_dose_mg"]
@@ -70,21 +80,93 @@ fits <- fits %>%
   mutate(
     Vd = nadler_blood_volume(bw_kg, height_cm, sex),
     dose_12C_mg = 1000 * bw_kg,
-    # Per-curve reliability: a joint fit is only as trustworthy as (a) it
-    # converged, (b) the shared kel isn't stuck at its bound (which taints
-    # both curves, since ka/kel are fit jointly), and (c) that curve's own
-    # R2 - and for 13C6, k_release - aren't flagged. See "Fit quality and
-    # what to trust" in docs/pk-model.md.
-    reliable_12C    = converged & !kel_at_bound & !r2_12C_low,
-    reliable_13C6   = converged & !kel_at_bound & !k_release_at_bound & !r2_13C6_low,
-    reliable_shared = reliable_12C & reliable_13C6   # for ka/kel, shared across both curves
+    # Reliability gated on the 12C fit only: it isn't stuck at the shared
+    # kel bound, and its own R2 clears R2_INCLUDE_MIN. Applied uniformly to
+    # every parameter (including F_13C6/capsule dissolution) rather than
+    # additionally requiring 13C6's own R2/k_release bound to pass - 13C6's
+    # much smaller, noisier signal fails its own bar far more often even
+    # when the underlying shared kinetics (from the same joint fit) are
+    # trustworthy, which excluded a lot of otherwise-fine subjects. See
+    # "Fit quality and what to trust" in docs/pk-model.md.
+    #
+    # `converged` deliberately excluded: it only reflects whether optim()'s
+    # L-BFGS-B hit its strict internal stopping criterion vs. its maxit cap,
+    # not whether the winning fit is actually good - checked directly on
+    # this cohort's own fit_results.csv, r2_12C for converged=FALSE rows
+    # (mean 0.902, n=22) was statistically indistinguishable from, if
+    # anything slightly better than, converged=TRUE rows (mean 0.890,
+    # n=46), and its minimum (0.762) was far ABOVE the converged group's
+    # minimum (0.249, the known-hard subjects). Requiring it anyway was
+    # needlessly discarding good fits, especially here where a delta/
+    # two-wave comparison requires BOTH visits reliable simultaneously - a
+    # 32% per-curve "not converged" rate compounds to exclude the majority
+    # of subjects from any paired comparison even though the fits it drops
+    # are just as trustworthy by R2 as the ones it keeps.
+    reliable = !kel_at_bound & r2_12C >= R2_INCLUDE_MIN
   )
+
+# ---- Volume of distribution (Vd) by diet arm -------------------------------
+# Vd isn't a fitted parameter - it's a direct, deterministic function of
+# each subject's own weight/height/sex via Nadler's equation (see "Volume
+# of distribution (Vd)" in docs/pk-model.md) - so it isn't gated on
+# `reliable` (a PK fit's own convergence/R2 has no bearing on it), and isn't
+# split by visit either: it's essentially fixed per subject (weight rarely
+# changes meaningfully within the study), so one value per subject
+# (averaged across whichever visits are present) compared across diet arms
+# is more useful than a visit-split view that just adds noise. Useful as a
+# covariate-balance check: it should cluster by sex (built into the
+# formula) and be reasonably similar between diet arms if randomization
+# worked as intended.
+
+vd_data <- fits %>% group_by(subject_id, diet, sex) %>%
+  summarise(Vd = mean(Vd), .groups = "drop")
+
+p_vd <- ggplot(vd_data, aes(diet, Vd, fill = diet)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
+  geom_jitter(aes(shape = sex), width = 0.08, size = 1.8, alpha = 0.8) +
+  scale_x_discrete(labels = DIET_LABELS) +
+  scale_fill_manual(values = DIET_COLORS, guide = "none") +
+  labs(title = "Nadler-estimated blood volume (Vd) by diet arm",
+       x = NULL, y = "Vd (L)", shape = "Sex") +
+  theme_Publication()
+
+ggsave("results/diet_vd_boxplot.pdf", p_vd, width = 6, height = 5, dpi = 150)
+cat("\nSaved results/diet_vd_boxplot.pdf\n")
+
+# ---- Fit quality (R2) by diet arm and visit --------------------------------
+# Deliberately NOT gated on `reliable` - reliable excludes on r2_12C_low,
+# which is DERIVED from r2_12C itself, so filtering by it here would hide
+# exactly the poor fits this plot exists to surface. A QC/diagnostic view of
+# fit quality across the whole cohort, not a trustworthy-subset comparison
+# like the parameter plots below.
+R2_RELIABLE_MIN <- 0.70   # matches 02_fit_erie_model.R's own threshold
+
+r2_data <- bind_rows(
+  fits %>% filter(!is.na(r2_12C)) %>% transmute(subject_id, diet, visit, isotope = "12C", r2 = r2_12C),
+  fits %>% filter(!is.na(r2_13C6)) %>% transmute(subject_id, diet, visit, isotope = "13C6", r2 = r2_13C6)
+)
+
+p_r2 <- ggplot(r2_data, aes(visit, r2, fill = diet)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5, position = position_dodge(width = 0.6)) +
+  geom_point(aes(color = diet), position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.6),
+             size = 1.2, alpha = 0.6, show.legend = FALSE) +
+  geom_hline(yintercept = R2_RELIABLE_MIN, linetype = "dashed", color = "grey40") +
+  facet_wrap(vars(isotope), nrow = 1, labeller = labeller(isotope = ISOTOPE_LABELS)) +
+  scale_x_discrete(labels = VISIT_LABELS) +
+  scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+  scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+  labs(title = "Fit quality (R2) by diet arm and visit, all fitted subjects",
+       x = NULL, y = expression(R^2)) +
+  theme_Publication()
+
+ggsave("results/diet_r2_boxplot.pdf", p_r2, width = 9, height = 5, dpi = 150)
+cat("\nSaved results/diet_r2_boxplot.pdf\n")
 
 # ---- Parameter summary table (mean/SD/SEM/n per diet x visit) -------------
 
-summarise_param <- function(param, reliable_col) {
+summarise_param <- function(param) {
   fits %>%
-    filter(.data[[reliable_col]]) %>%
+    filter(reliable) %>%
     group_by(diet, visit) %>%
     summarise(
       mean = mean(.data[[param]], na.rm = TRUE),
@@ -96,73 +178,311 @@ summarise_param <- function(param, reliable_col) {
 }
 
 param_table <- bind_rows(
-  summarise_param("ka",  "reliable_shared"),
-  summarise_param("kel", "reliable_shared"),
-  summarise_param("F_12C", "reliable_12C"),
-  summarise_param("F_13C6", "reliable_13C6"),
-  summarise_param("capsule_dissolution_halflife_min", "reliable_13C6")
+  summarise_param("ka"),
+  summarise_param("kel"),
+  summarise_param("F_12C"),
+  summarise_param("F_13C6")
 ) %>% arrange(parameter, diet, visit)
 
 dir.create("results", showWarnings = FALSE)
 write_csv(param_table, "results/diet_parameter_summary.csv")
+cat("=== Parameter summary by diet x visit (reliable fits only) ===\n")
+print(as.data.frame(param_table), digits = 3)
 
-# ---- Baseline vs intervention comparison, per diet arm (paired) -----------
+# ---- Statistical comparison: diet x time linear mixed models --------------
+# One LMM per parameter, testing whether diet arm, visit (before/after the
+# diet), or their interaction (the actual "did the diet change this
+# differently by arm" question) explains variation - subject_id as a random
+# intercept, since each subject contributes a paired baseline/intervention observation
+# (repeated measures), not two independent ones. Uses the same reliability
+# filter as the descriptive summary above; lmer handles the resulting
+# unbalanced design (not every subject has both visits reliable) without
+# needing complete pairs, unlike a paired t-test.
+
+# log_transform defaults TRUE: ka/kel/k_release-derived halflife are rate
+# constants and F_12C/F_13C6 are bioavailable fractions - all positive,
+# multiplicative-scale quantities standardly treated as log-normal in PK
+# work (not normal on their raw scale). Log-transforming makes the LMM's
+# normal-residuals assumption more defensible and turns a diet effect into
+# a fold-change rather than an absolute difference, which is the more
+# natural scale for a rate constant.
 #
-# A subject only enters a parameter's paired comparison if BOTH their
-# baseline and intervention fit are reliable for that parameter (same
-# reliable_* columns as above) - a paired test needs a complete pair, and a
-# subject reliable at one visit but not the other would otherwise silently
-# get compared against a value that shouldn't be trusted.
+# Adjusted for sex as a fixed-effect covariate - plausibly affects
+# absorption/clearance/F independent of diet (sex is already built into Vd
+# itself via nadler_blood_volume(), but not into ka/kel/F, which are fit
+# independent of Vd), so including it here lets the diet/visit effect be
+# read net of that variation rather than having it inflate the
+# residual/subject-level noise the model would otherwise attribute to diet
+# or visit. (BMI tried too, dropped - not included here.)
+#
+# Log scale only - tried alongside the raw scale directly (both reported
+# side by side) and log was consistently the better-behaved fit, so raw
+# was dropped rather than carried forward as dead weight.
+fit_lmm <- function(param) {
+  d <- fits %>% filter(reliable) %>%
+    select(subject_id, diet, visit, sex, value = all_of(param)) %>%
+    mutate(value = log(value))
+  n_subjects_both <- d %>% count(subject_id) %>% filter(n == 2) %>% nrow()
+  if (n_subjects_both < 3) {
+    warning(param, ": fewer than 3 subjects with both visits reliable - skipping LMM")
+    return(NULL)
+  }
+  model <- lmer(value ~ diet * visit + sex + (1 | subject_id), data = d)
+  a <- anova(model)  # Type III, Satterthwaite df (lmerTest default)
+  tibble(parameter = param, term = rownames(a), `F` = a$`F value`, df1 = a$NumDF, df2 = a$DenDF, p = a$`Pr(>F)`)
+}
 
-compare_before_after <- function(param, reliable_col) {
-  fits %>%
-    filter(.data[[reliable_col]]) %>%
+lmm_results <- bind_rows(
+  fit_lmm("ka"),
+  fit_lmm("kel"),
+  fit_lmm("F_12C"),
+  fit_lmm("F_13C6")
+) %>% arrange(parameter, term)
+
+write_csv(lmm_results, "results/diet_lmm_results.csv")
+cat("\n=== LMM (diet x visit, subject random intercept): F-tests ===\n")
+print(as.data.frame(lmm_results), digits = 3)
+
+# ---- Boxplot: diet x visit distributions for each parameter ---------------
+# capsule_dissolution_halflife_min deliberately excluded from all of this
+# script's summaries/plots: it only exists (k_release is only fit) for
+# subjects whose 13C6 curve still uses the original gradual-dissolution
+# mechanism - 9 of 68 fits in the latest full cohort run, the rest now use
+# the onset-lag or independent-second-wave mechanisms added this session,
+# which model 13C6 as an instant bolus with no capsule-release step at
+# all. Too small and too non-random a subset (it's exactly the "still
+# explained by the old, simpler mechanism" group) to summarize
+# meaningfully here.
+PARAM_LABELS <- c(ka = "ka (1/min)", kel = "kel (1/min)", F_12C = "F[12C]", F_13C6 = "F[13C6]")
+
+box_data <- bind_rows(
+  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "ka", value = ka),
+  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "kel", value = kel),
+  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_12C", value = F_12C),
+  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_13C6", value = F_13C6)
+)
+
+# One PDF per parameter, faceted by diet arm and colored by visit
+# (VISIT_COLORS, matching diet_summary_curves_12C/13C6.pdf) rather than one
+# combined figure faceted by parameter and colored by diet - makes the
+# baseline-vs-intervention comparison the primary visual read within each diet-arm
+# panel, consistent with how the curve plots present it.
+plot_param_boxplot <- function(param_name) {
+  d <- box_data %>% filter(parameter == param_name)
+  if (nrow(d) == 0) return(NULL)
+  ggplot(d, aes(visit, value, fill = visit)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
+    geom_jitter(aes(color = visit), width = 0.08, size = 1.2, alpha = 0.6, show.legend = FALSE) +
+    facet_wrap(vars(diet), nrow = 1, labeller = labeller(diet = DIET_LABELS)) +
+    scale_x_discrete(labels = VISIT_LABELS) +
+    scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    scale_color_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    labs(title = sprintf("%s by diet arm and visit", PARAM_LABELS[[param_name]]), x = NULL, y = NULL) +
+    theme_Publication()
+}
+
+for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
+  p <- plot_param_boxplot(param_name)
+  if (!is.null(p)) {
+    out_path <- sprintf("results/diet_parameter_boxplot_%s.pdf", param_name)
+    ggsave(out_path, p, width = 7, height = 5, dpi = 150)
+    cat("\nSaved", out_path, "\n")
+  }
+}
+cat("Saved results/diet_lmm_results.csv\n")
+
+# ---- Delta plots: within-subject before/after diet change, by diet arm ----
+# The boxplot above compares baseline and intervention as separate distributions; the
+# actual "did the diet change this parameter" question is the per-subject
+# intervention-vs-baseline change, only defined for subjects with BOTH visits reliable
+# (so every delta is a complete pair, not a mix of paired and unpaired
+# values). Reported as a log fold-change (log(intervention) - log(baseline)), matching
+# the log-transformed LMMs above and for the same reason - these are
+# rate/fraction-like quantities better compared multiplicatively. Compared
+# between diet arms with a Wilcoxon rank-sum test (ggpubr::stat_compare_means)
+# rather than a t-test, since n per arm is small and not assumed normal.
+
+delta_param <- function(param) {
+  fits %>% filter(reliable) %>%
     select(subject_id, diet, visit, value = all_of(param)) %>%
     pivot_wider(names_from = visit, values_from = value) %>%
     filter(!is.na(baseline), !is.na(intervention)) %>%
-    group_by(diet) %>%
-    group_modify(~ {
-      delta <- .x$intervention - .x$baseline
-      n <- nrow(.x)
-      tt <- if (n >= 2) t.test(.x$intervention, .x$baseline, paired = TRUE) else NULL
-      tibble(
-        n = n,
-        mean_baseline      = mean(.x$baseline),
-        mean_intervention  = mean(.x$intervention),
-        mean_delta         = mean(delta),
-        se_delta           = if (n >= 2) sd(delta) / sqrt(n) else NA_real_,
-        t_stat             = if (!is.null(tt)) unname(tt$statistic) else NA_real_,
-        df                 = if (!is.null(tt)) unname(tt$parameter) else NA_real_,
-        p_value            = if (!is.null(tt)) tt$p.value else NA_real_,
-        ci95_lower         = if (!is.null(tt)) tt$conf.int[1] else NA_real_,
-        ci95_upper         = if (!is.null(tt)) tt$conf.int[2] else NA_real_
-      )
-    }) %>%
-    ungroup() %>%
-    mutate(parameter = param, .before = 1)
+    transmute(subject_id, diet, parameter = param, delta = log(intervention) - log(baseline))
 }
 
-before_after_table <- bind_rows(
-  compare_before_after("ka",  "reliable_shared"),
-  compare_before_after("kel", "reliable_shared"),
-  compare_before_after("F_12C", "reliable_12C"),
-  compare_before_after("F_13C6", "reliable_13C6"),
-  compare_before_after("capsule_dissolution_halflife_min", "reliable_13C6")
-) %>% arrange(parameter, diet)
+delta_data <- bind_rows(
+  delta_param("ka"), delta_param("kel"), delta_param("F_12C"),
+  delta_param("F_13C6")
+)
 
-write_csv(before_after_table, "results/diet_before_after_comparison.csv")
+write_csv(delta_data, "results/diet_parameter_deltas.csv")
+
+p_delta <- ggplot(delta_data, aes(diet, delta, fill = diet)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
+  geom_jitter(aes(color = diet), width = 0.08, size = 1.2, alpha = 0.6, show.legend = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  stat_compare_means(method = "wilcox.test", label = "p.format", size = 3) +
+  facet_wrap(vars(parameter), scales = "free_y", nrow = 2,
+             labeller = labeller(parameter = PARAM_LABELS)) +
+  scale_x_discrete(labels = DIET_LABELS) +
+  scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+  scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+  labs(title = "Within-subject diet change (log fold-change, intervention vs baseline) by diet arm",
+       x = NULL, y = "log(intervention / baseline)") +
+  theme_Publication()
+
+ggsave("results/diet_parameter_delta_boxplot.pdf", p_delta, width = 11, height = 7, dpi = 150)
+cat("\nSaved results/diet_parameter_delta_boxplot.pdf and results/diet_parameter_deltas.csv\n")
+
+# ---- baseline vs intervention ("before/after") WITHIN each diet arm --------------------
+# A different question from the delta plot above (which compares the SIZE
+# of the intervention-baseline change BETWEEN diet arms): this asks whether baseline and
+# intervention differ at all WITHIN each diet arm on its own. Computed as a paired
+# Wilcoxon signed-rank test - equivalent to a one-sample Wilcoxon test of
+# each subject's own delta (already computed above) against 0 - rather
+# than ggpubr's automatic pairing detection across facets, which silently
+# breaks if the same subject doesn't land in the same row order in every
+# facet. box_data (below) still shows every reliable single-visit value,
+# including subjects who only have one visit reliable - a larger, more
+# representative sample than the paired test itself can use (pairing
+# necessarily requires both visits), so the boxplot's own n and the test's
+# n legitimately differ; that's expected, not a bug.
+before_after_p <- box_data %>%
+  group_by(parameter, diet) %>%
+  summarise(y.position = max(value, na.rm = TRUE) * 1.08, .groups = "drop") %>%
+  left_join(
+    delta_data %>% group_by(parameter, diet) %>%
+      summarise(n_paired = n(),
+                p = if (n() >= 3) wilcox.test(delta, mu = 0)$p.value else NA_real_,
+                .groups = "drop"),
+    by = c("parameter", "diet")
+  ) %>%
+  mutate(group1 = "baseline", group2 = "intervention",
+         label = if_else(is.na(p), sprintf("n=%d", n_paired), sprintf("p=%.3f (n=%d)", p, n_paired)))
+
+write_csv(before_after_p, "results/diet_before_after_wilcoxon.csv")
+
+# One PDF per parameter here too, faceted by diet arm, colored by visit
+# (VISIT_COLORS) instead of a flat diet fill with no legend - same
+# rationale as plot_param_boxplot() above.
+plot_before_after <- function(param_name) {
+  d <- box_data %>% filter(parameter == param_name)
+  if (nrow(d) == 0) return(NULL)
+  ann <- before_after_p %>% filter(parameter == param_name)
+  ggplot(d, aes(visit, value, fill = visit)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
+    geom_jitter(width = 0.08, size = 1.1, alpha = 0.5, show.legend = FALSE) +
+    stat_pvalue_manual(ann, label = "label", tip.length = 0.01, size = 2.8) +
+    facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
+    scale_x_discrete(labels = VISIT_LABELS) +
+    scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    labs(title = sprintf("%s: baseline vs intervention within each diet arm (paired Wilcoxon)", PARAM_LABELS[[param_name]]),
+         x = NULL, y = NULL) +
+    theme_Publication()
+}
+
+for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
+  p <- plot_before_after(param_name)
+  if (!is.null(p)) {
+    out_path <- sprintf("results/diet_before_after_boxplot_%s.pdf", param_name)
+    ggsave(out_path, p, width = 7, height = 5, dpi = 150)
+    cat("\nSaved", out_path, "\n")
+  }
+}
+cat("Saved results/diet_before_after_wilcoxon.csv\n")
+
+# ---- Two-wave ("second peak") characteristics by diet arm -----------------
+# Whether a genuine second wave was detected at all (two_wave selected, via
+# has_peak_dip_rise() in 02_fit_erie_model.R) is itself a diet-relevant
+# outcome, and - among the subjects who show one - so is its timing
+# (t_lag, "time between peaks") and how much of the dose rode it
+# (f_delayed for 12C, f_delayed_13C6 for 13C6's own independent choice).
+# Exploratory only: just 12/68 curves are two_wave, so this is underpowered
+# and reported for completeness, not as a confirmed effect.
+
+two_wave_rate <- fits %>% filter(reliable) %>%
+  group_by(diet, visit) %>%
+  summarise(n = n(), n_two_wave = sum(model == "two_wave"), .groups = "drop") %>%
+  mutate(pct_two_wave = round(100 * n_two_wave / n, 1))
+
+write_csv(two_wave_rate, "results/diet_two_wave_rate.csv")
+cat("\n=== two_wave selection rate by diet x visit (reliable fits only) ===\n")
+print(as.data.frame(two_wave_rate), digits = 3)
+
+two_wave_tbl <- table(fits$diet[fits$reliable], fits$model[fits$reliable] == "two_wave")
+if (all(dim(two_wave_tbl) == c(2, 2))) {
+  fisher_p <- fisher.test(two_wave_tbl)$p.value
+  cat("\nFisher's exact test, diet x two_wave selection: p =", round(fisher_p, 3), "\n")
+}
+
+two_wave_params <- fits %>% filter(reliable, model == "two_wave") %>%
+  select(subject_id, diet, visit, t_lag, f_delayed, f_delayed_13C6)
+write_csv(two_wave_params, "results/diet_two_wave_params.csv")
+
+if (nrow(two_wave_params) >= 4) {
+  p_two_wave <- two_wave_params %>%
+    pivot_longer(c(t_lag, f_delayed, f_delayed_13C6), names_to = "parameter", values_to = "value") %>%
+    filter(!is.na(value)) %>%
+    ggplot(aes(diet, value, fill = diet)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
+    geom_jitter(aes(color = diet), width = 0.08, size = 1.4, alpha = 0.7, show.legend = FALSE) +
+    stat_compare_means(method = "wilcox.test", label = "p.format", size = 3) +
+    facet_wrap(vars(parameter), scales = "free_y",
+               labeller = labeller(parameter = c(t_lag = "t_lag (min)", f_delayed = "f_delayed (12C)",
+                                                  f_delayed_13C6 = "f_delayed (13C6)"))) +
+    scale_x_discrete(labels = DIET_LABELS) +
+    scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+    scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
+    labs(title = sprintf("Two-wave characteristics by diet arm (exploratory, n=%d curves)", nrow(two_wave_params)),
+         x = NULL, y = NULL) +
+    theme_Publication()
+  ggsave("results/diet_two_wave_boxplot.pdf", p_two_wave, width = 10, height = 4.5, dpi = 150)
+  cat("\nSaved results/diet_two_wave_boxplot.pdf, results/diet_two_wave_rate.csv, results/diet_two_wave_params.csv\n")
+} else {
+  cat("\nToo few two_wave fits to plot a diet comparison (n =", nrow(two_wave_params), ")\n")
+}
 
 # ---- Average concentration-time curves per diet x visit x isotope ---------
-
+# Mirrors simulate_fit() in 02_fit_erie_model.R exactly - both curves' shape
+# depends on which model/mechanism won for that subject x visit, not just
+# on the plain single-compartment equations. Getting this wrong isn't just
+# a shape mismatch: two_wave's 13C6 stage always carries k_release, but
+# single_wave's newer 13C6 mechanisms (t_lag1_13C6 onset lag,
+# f_delayed2_13C6/t_lag2_13C6 second wave) both explicitly set
+# k_release = NA once they win (see fit_subject_visit_single_wave()) -
+# feeding that NA into simulate_delayed_release() silently returns NA for
+# every t>0, and since rowMeans()/sd() below aren't na.rm, ONE such subject
+# in a diet x visit group is enough to blank out that group's entire mean
+# curve. Confirmed: 14 of 21 single_wave rows in the full cohort have
+# k_release = NA (11 onset-lag + 3 second-wave), enough to hit virtually
+# every group - this is what silently broke every 13C6 panel.
 average_curve_isotope <- function(diet_val, vis, isotope) {
-  reliable_col <- if (isotope == "12C") "reliable_12C" else "reliable_13C6"
-  sub <- fits %>% filter(diet == diet_val, visit == vis, .data[[reliable_col]])
+  sub <- fits %>% filter(diet == diet_val, visit == vis, reliable)
   if (nrow(sub) == 0) return(NULL)
 
   conc_list <- sub %>% pmap(function(...) {
     r <- list(...)
     if (isotope == "12C") {
-      bateman_conc(FINE_T_DIET, r$ka, r$kel, r$F_12C, r$dose_12C_mg, r$Vd)
+      if (r$model == "two_wave") {
+        simA <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_12C, dose, r$Vd)
+        simulate_lagged_dose(simA, FINE_T_DIET, r$dose_12C_mg, r$f_delayed, r$t_lag)
+      } else {
+        bateman_conc(FINE_T_DIET, r$ka, r$kel, r$F_12C, r$dose_12C_mg, r$Vd)
+      }
+      # t_lag1_13C6/t_lag2_13C6 checked FIRST, before dispatching on
+      # r$model - 13C6's own onset-lag/independent-second-wave mechanisms
+      # can now win under EITHER 12C model (see fit_subject_visit_two_wave()
+      # stage 2), so model alone no longer determines which 13C6 mechanism
+      # is actually in play.
+    } else if (!is.na(r$t_lag1_13C6)) {
+      simB <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, r$Vd)
+      simulate_two_lag_dose(simB, FINE_T_DIET, dose_13C6_mg, f_delayed = 0, t_lag1 = r$t_lag1_13C6, gap = 0)
+    } else if (!is.na(r$t_lag2_13C6)) {
+      simB <- function(t, dose) bateman_conc(t, r$ka, r$kel, r$F_13C6, dose, r$Vd)
+      simulate_lagged_dose(simB, FINE_T_DIET, dose_13C6_mg, r$f_delayed2_13C6, r$t_lag2_13C6)
+    } else if (r$model == "two_wave") {
+      simB <- function(t, dose) simulate_delayed_release(t, r$k_release, r$ka, r$kel, r$F_13C6, dose, r$Vd)$conc
+      simulate_lagged_dose(simB, FINE_T_DIET, dose_13C6_mg, r$f_delayed_13C6, r$t_lag)
     } else {
       simulate_delayed_release(FINE_T_DIET, r$k_release, r$ka, r$kel, r$F_13C6, dose_13C6_mg, r$Vd)$conc
     }
@@ -177,28 +497,44 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
   )
 }
 
-diet_curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("baseline", "intervention"), isotope = c("12C", "13C6")) %>%
-  pmap_dfr(function(diet, visit, isotope) {
-    ac <- average_curve_isotope(diet, visit, isotope)
-    if (is.null(ac)) return(NULL)
-    ac %>% mutate(diet = diet, visit = visit, isotope = isotope)
-  })
+# Faceted by DIET ARM (not isotope x visit as an earlier version had it) so
+# baseline and intervention - the actual before/after-diet comparison - are overlaid
+# together within the same panel, colored by visit, rather than split
+# across separate panel columns where comparing them means tracking a
+# same-colored line across two plots. One PDF per isotope, not a shared
+# isotope-faceted figure: 12C and 13C6 differ by ~1000x in concentration
+# (same reason 02_fit_erie_model.R's per-subject plots use free y-scales),
+# so a combined figure either hides 13C6's shape entirely on a shared axis
+# or needs free scales that make the two isotopes hard to present, compare,
+# or caption together as one figure anyway.
+plot_diet_curves <- function(isotope_val) {
+  curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("baseline", "intervention")) %>%
+    pmap_dfr(function(diet, visit) {
+      ac <- average_curve_isotope(diet, visit, isotope_val)
+      if (is.null(ac)) return(NULL)
+      ac %>% mutate(diet = diet, visit = visit)
+    })
+  if (nrow(curves) == 0) return(NULL)
 
-# facet_grid (isotope x visit), not facet_wrap, so each ISOTOPE ROW gets its
-# own free y-scale shared across the two visit columns - the 12C and 13C6
-# curves differ by ~1000x in concentration (same reason 02_fit_erie_model.R's
-# per-subject plots use free scales), but baseline vs intervention for the
-# same isotope are on a comparable scale and are usefully left directly
-# comparable.
-p <- ggplot(diet_curves, aes(time_min, mean_conc, color = diet, fill = diet)) +
-  geom_ribbon(aes(ymin = mean_conc - sem_conc, ymax = mean_conc + sem_conc), alpha = 0.2, color = NA) +
-  geom_line(linewidth = 0.9) +
-  facet_grid(rows = vars(isotope), cols = vars(visit), scales = "free_y",
-             labeller = labeller(isotope = ISOTOPE_LABELS, visit = VISIT_LABELS)) +
-  scale_color_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-  scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-  labs(title = "Mean fructose concentration by dietary arm",
-       x = "Time (min)", y = "Concentration (mg/L)") +
-  theme_Publication()
+  ggplot(curves, aes(time_min, mean_conc, color = visit, fill = visit)) +
+    geom_ribbon(aes(ymin = mean_conc - sem_conc, ymax = mean_conc + sem_conc), alpha = 0.2, color = NA) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
+    scale_color_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    labs(title = sprintf("Mean %s concentration: baseline vs intervention within each diet arm", ISOTOPE_LABELS[[isotope_val]]),
+         x = "Time (min)", y = "Concentration (mg/L)") +
+    theme_Publication()
+}
 
-ggsave("results/diet_summary_curves.pdf", p, width = 10, height = 7, dpi = 150)
+p_12C <- plot_diet_curves("12C")
+if (!is.null(p_12C)) {
+  ggsave("results/diet_summary_curves_12C.pdf", p_12C, width = 9, height = 5, dpi = 150)
+  cat("\nSaved results/diet_summary_curves_12C.pdf\n")
+}
+p_13C6 <- plot_diet_curves("13C6")
+if (!is.null(p_13C6)) {
+  ggsave("results/diet_summary_curves_13C6.pdf", p_13C6, width = 9, height = 5, dpi = 150)
+  cat("\nSaved results/diet_summary_curves_13C6.pdf\n")
+}
+cat("\nSaved results/diet_parameter_summary.csv\n")

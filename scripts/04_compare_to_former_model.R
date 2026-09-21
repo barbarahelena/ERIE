@@ -49,7 +49,7 @@ theme_Publication <- function(base_size=14, base_family="sans") {
 ISOTOPE_LABELS <- c("12C" = "Fructose 12C (unlabelled)", "13C6" = "Fructose 13C6 (labelled)")
 
 FORMER_RESULTS_CSV <- "former_models/MixedModel/Results/fit_results_joint.csv"
-CURRENT_RESULTS_CSV <- "results/fit_results_joint.csv"
+CURRENT_RESULTS_CSV <- "results/fit_results.csv"
 
 if (!file.exists(CURRENT_RESULTS_CSV)) {
   stop(CURRENT_RESULTS_CSV, " not found - run scripts/02_fit_erie_model.R first.")

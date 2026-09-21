@@ -98,20 +98,42 @@ string_seed <- function(key) {
 #' @param tmax_lambda Penalty weight applied to Tmax shortfalls.
 #' @param weight_floor_frac Floor on the within-curve weighting, as a
 #'   fraction of that curve's own observed Cmax.
+#' @param proportional_weighting If TRUE (default), apply the within-curve
+#'   `1/pred^2` weighting described above. If FALSE, use plain per-curve SSE
+#'   normalized only by that curve's own total variance (matching
+#'   `former_models/MixedModel`'s objective exactly) - every observed point
+#'   counts equally, including the peak/early region the weighted version
+#'   deliberately discounts. Set to FALSE when fitting a curve whose most
+#'   informative feature IS the peak/early shape (e.g. a sharp early spike a
+#'   sparse tail can't otherwise pin down) - confirmed by direct comparison
+#'   on ER03 FCT1's 13C6 curve, a known-catastrophic fit (R2 = -2.18)
+#'   under the weighted objective: switching to unweighted alone (same
+#'   MIN_TMAX, same bounds, ordinary unseeded multistart) recovered R2 =
+#'   0.37, and former_models/MixedModel's own historical fit for the exact
+#'   same subject - built with an unweighted objective all along - reached
+#'   R2 = 0.71. The weighted default remains appropriate for curves without
+#'   a sharp early feature, where it was added specifically to fix a
+#'   measured ~24x peak-vs-tail heteroscedasticity (see docs/pk-model.md).
 #' @return A function(theta) -> scalar objective value to minimize.
 build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20,
-                                   tmax_lambda = 50, weight_floor_frac = 0.01) {
+                                   tmax_lambda = 50, weight_floor_frac = 0.01,
+                                   proportional_weighting = TRUE) {
   function(theta) {
     total <- 0
     for (cv in curves) {
       pred <- tryCatch(cv$simulate(theta), error = function(e) NA_real_)
       if (length(pred) != length(cv$conc) || any(!is.finite(pred))) return(1e10)
 
-      floor_val <- weight_floor_frac * max(cv$conc)
-      w <- 1 / pmax(pred, floor_val)^2
-      w_mean_obs <- sum(w * cv$conc) / sum(w)
-      weighted_ss_tot <- sum(w * (cv$conc - w_mean_obs)^2)
-      total <- total + sum(w * (pred - cv$conc)^2) / weighted_ss_tot
+      if (proportional_weighting) {
+        floor_val <- weight_floor_frac * max(cv$conc)
+        w <- 1 / pmax(pred, floor_val)^2
+        w_mean_obs <- sum(w * cv$conc) / sum(w)
+        weighted_ss_tot <- sum(w * (cv$conc - w_mean_obs)^2)
+        total <- total + sum(w * (pred - cv$conc)^2) / weighted_ss_tot
+      } else {
+        ss_tot <- sum((cv$conc - mean(cv$conc))^2)
+        total <- total + sum((pred - cv$conc)^2) / ss_tot
+      }
 
       if (!is.null(cv$fine_simulate) && (!is.null(min_tmax) || !is.null(cmax_tol))) {
         fine <- tryCatch(cv$fine_simulate(theta), error = function(e) NULL)
@@ -147,21 +169,50 @@ build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax
 #' @param seeds List of named numeric starting vectors (same names/order as
 #'   `lower`/`upper`).
 #' @param control List passed through to `optim()`. If it doesn't already
-#'   set `parscale`, defaults to `upper - lower` per parameter - L-BFGS-B's
-#'   internal step sizing assumes roughly unit-scaled parameters, and
-#'   fitted PK parameters routinely span very different magnitudes (e.g.
-#'   rate constants ~1e-4-1 alongside fractions 0-1) without it.
+#'   set `parscale`, one is computed PER START from that start's own
+#'   magnitude (see below) - L-BFGS-B's internal step sizing assumes
+#'   roughly unit-scaled parameters, and fitted PK parameters routinely
+#'   span very different magnitudes (e.g. rate constants ~1e-4-1 alongside
+#'   fractions 0-1) without it.
 #' @return The best `optim()` result (a list with `par`, `value`, ...), or
 #'   NULL if every start failed.
 fit_multistart <- function(objective_fn, lower, upper, seeds, control = list(maxit = 100)) {
-  if (is.null(control$parscale)) control$parscale <- upper - lower
+  bound_range <- upper - lower
 
   best <- NULL
   for (start in seeds) {
     start <- pmax(pmin(start, upper * 0.99), lower * 1.01)
+    start_control <- control
+    if (is.null(start_control$parscale)) {
+      # A single parscale = upper - lower (the previous default) is only a
+      # good proxy for a parameter's natural scale when its bounds are
+      # already tight around plausible values. Several bounds here are
+      # deliberately wide open (e.g. ka/F in [1e-4, 1], to not bias the
+      # research question) even though real fitted values sit around
+      # 0.01-0.05 - for those, upper-lower is ~20-100x too large, and
+      # L-BFGS-B's step sizing degrades badly enough to get stuck near the
+      # starting point instead of descending. Confirmed concretely on ER11
+      # FCT1 (two_wave): production's own objective (with its MIN_TMAX/CMAX
+      # penalties) scores the reported fit (t_lag=47.3) at 0.208, but a
+      # search using each start's OWN magnitude as parscale finds 0.188 at
+      # t_lag=120 - which lines up with the actual post-peak dip evidence
+      # (trigger_time=150) that justified attempting two_wave in the first
+      # place; the bound-width parscale (ka/F_12C parscale ~1, ~20-70x
+      # their ~0.015 starting values here) reproduces the same stuck
+      # behavior as no parscale at all (both converge to essentially the
+      # same worse point, obj ~0.26-0.28).
+      # Using the start's own magnitude fixes this: a multistart seed is
+      # already meant to be in the right neighborhood (informed by a
+      # pre-fit, evidence-anchored, or a systematic grid/diagonal), so its
+      # magnitude is a far better estimate of the LOCAL natural scale than
+      # the global bound width. Floored at 1% of the bound range so a
+      # near-zero starting value (e.g. f_delayed seeded at 0.001) doesn't
+      # collapse parscale toward zero.
+      start_control$parscale <- pmax(abs(start), 0.01 * bound_range)
+    }
     fit <- tryCatch(
       stats::optim(start, objective_fn, method = "L-BFGS-B",
-                   lower = lower, upper = upper, control = control),
+                   lower = lower, upper = upper, control = start_control),
       error = function(e) NULL
     )
     if (!is.null(fit) && is.finite(fit$value) && fit$value < 1e6 &&
