@@ -77,7 +77,7 @@ peak_dip_rise_info <- function(times, conc, min_rise_frac = 0.15, min_first_peak
 
   # The first "wave 1" candidate: the first point after which concentration
   # turns down, that's still a substantial fraction of the curve's overall
-  # peak. Deliberately NOT anchored on the global max: a genuine second wave is
+  # peak. Not anchored on the global max: a genuine second wave is
   # often taller than the first, so that would miss exactly that case.
   candidates <- which(diff(c) < 0 & c[-n] >= min_first_peak_frac * overall_peak)
   if (length(candidates) == 0) return(none)

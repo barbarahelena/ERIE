@@ -170,7 +170,7 @@ fit_curve_independent <- function(obs_time, obs_conc, dose, Vd) {
                                       proportional_weighting = FALSE)
 
   # ka=kel diagonal seeds: the objective is awkward near ka ~ kel and generic
-  # seeds miss the optimum there (see "Known limitations" in docs/pk-model.md).
+  # seeds miss the optimum there (see "Known limitations and open questions" in docs/pk-model.md).
   diagonal_seeds <- lapply(c(0.008, 0.012, 0.016, 0.02, 0.025, 0.03, 0.04, 0.05, 0.07),
                             function(v) c(ka = v, kel = v, F = 0.03))
   seeds <- c(
@@ -460,8 +460,8 @@ fit_subject_visit_two_wave <- function(sid, vis, extra_seeds = list(), maxit = 8
 
   # t_lag's lower bound for this subject: a step on their own t=30 sample (5 if
   # at or below EARLY_LAG_OK_MGL, else 30). Nothing is sampled between t=0 and
-  # t=30, so a partial floor is as unsupported as none - see "Why a step and not
-  # an interpolation" in docs/pk-model.md.
+  # t=30, so a partial floor is as unsupported as none (see "The post-peak dip
+  # and the lagged-dose model" in docs/pk-model.md).
   obs30_12C <- obs12$conc_mgL[obs12$time_min == 30]
   t_lag_lower <- if (obs30_12C <= EARLY_LAG_OK_MGL) BOUNDS_LAGGED_12C$t_lag[1] else 30
 
@@ -645,7 +645,7 @@ refit_flagged_single_wave <- function(i, seeds, maxit) {
 single_wave_results <- adaptive_retry(
   single_wave_results,
   bound_cols = c(kel_at_bound = "kel", k_release_at_bound = "k_release"),
-  # r2_13C6_low deliberately excluded: a poor 13C6 fit is usually a structural
+  # r2_13C6_low is excluded: a poor 13C6 fit is usually a structural
   # mismatch, not an under-searched optimum (see "Adaptive retry" in
   # docs/pk-model.md).
   extra_flag_cols = c("r2_12C_low"),
@@ -695,9 +695,8 @@ two_wave_results <- adaptive_retry(
 K_12C_SINGLE_WAVE <- 3   # ka, kel, F_12C
 K_12C_TWO_WAVE    <- 5   # + f_delayed, t_lag
 
-# Plain AIC, not AICc: AICc was tried and reverted because at n=8 it re-excluded
-# every confirmed-genuine case (see "Tried and reverted: AICc" in
-# docs/pk-model.md).
+# Plain AIC (no AICc): at n=8, AICc excludes every confirmed plateau case (see
+# "Choosing between single_wave and two_wave" in docs/pk-model.md).
 aic <- function(rss, n, k) n * log(rss / n) + 2 * k
 
 sw <- single_wave_results %>% select(subject_id, visit, rss_12C, n_12C) %>%

@@ -1,7 +1,6 @@
 # ERIE fructose kinetics
 
-Pharmacokinetic (PK) modeling of plasma fructose kinetics from the ERIE
-trial's fructose challenge tests (FCT).
+Pharmacokinetic (PK) modeling of plasma fructose kinetics from the ERIE trial's fructose challenge tests (FCT).
 
 ## Project layout
 
@@ -24,13 +23,10 @@ docs/
   data-cleaning-notes.md decisions and data-quality findings from cleaning
   pk-model.md            model specification, rationale, and caveats
   diet-summary.md        how the diet arms are compared, and why
+  problems-and-fixes.md  history of problems found and how each was fixed
 ```
 
-The three `pk_*.R` files in `scripts/assets/` are written to be
-project-agnostic - they know about doses, rate constants, and volumes of
-distribution, but nothing about fructose or ERIE specifically. Copy them
-into another PK modeling project as a starting point; only
-`02_fit_erie_model.R` (and the cleaning script) should need to change.
+The three `pk_*.R` files in `scripts/assets/` are written to be project-agnostic - they know about doses, rate constants, and volumes of distribution, but nothing about fructose or ERIE specifically. Copy them into another PK modeling project as a starting point; only `02_fit_erie_model.R` (and the cleaning script) should need to change.
 
 ## Running the pipeline
 
@@ -45,33 +41,21 @@ pixi run pipeline      # all three, in order
 pixi run test-engine   # regression tests for the generic PK engine
 ```
 
-The model fit takes several minutes (parallelized across cores - each of
-the 68 subject x visit fits involves numerical ODE integration and
-multi-start optimization; see `docs/pk-model.md`). Two environment
-variables help while iterating:
+The model fit takes several minutes (parallelized across cores - each of the 68 subject x visit fits involves numerical ODE integration and multi-start optimization; see `docs/pk-model.md`). Two environment variables help while iterating:
 
 ```
 ERIE_TEST_SUBJECTS="ER01,ER02,ER03" pixi run fit-model   # fit only these subjects
 ERIE_N_CORES=4 pixi run fit-model                        # cap the number of cores
 ```
 
-`scripts/assets/replot_only.R` is not part of the pipeline: it re-draws
-`results/plots_individual/` from an existing `results/fit_results.csv`, to
-check a plotting-only change without refitting.
+`scripts/assets/replot_only.R` is not part of the pipeline: it re-draws `results/plots_individual/` from an existing `results/fit_results.csv`, to check a plotting-only change without refitting.
 
 ## Start here
 
-Comments in the scripts say what the code does; the reasoning and the
-evidence behind it live in `docs/`.
+Comments in the scripts say what the code does; the reasoning and the evidence behind it live in `docs/`.
 
 - **What the data looks like and what was fixed:** `docs/data-cleaning-notes.md`
-  - includes a real dose discrepancy between two constants files, an
-    inconsistent decimal mark between raw files, and an undocumented
-    column-to-subject mapping that was reverse-engineered and verified.
-- **What the model is and what it can/can't tell you:**
-  `docs/pk-model.md` - in particular, the bioavailability estimates (`F`)
-  are conditional on an assumed volume of distribution and should not be
-  reported as precise absolute numbers; see the identifiability discussion
-  there before using them in any write-up.
-- **How the diet arms are compared:** `docs/diet-summary.md` - which fits are
-  included, the statistics used, and what is exploratory only.
+  - includes a real dose discrepancy between two constants files, an inconsistent decimal mark between raw files, and an undocumented column-to-subject mapping that was reverse-engineered and verified.
+- **What the model is and what it can/can't tell you:** `docs/pk-model.md` - in particular, the bioavailability estimates (`F`) are conditional on an assumed volume of distribution and should not be reported as precise absolute numbers; see the identifiability discussion there before using them in any write-up.
+- **How the diet arms are compared:** `docs/diet-summary.md` - which fits are included, the statistics used, and what is exploratory only.
+- **Why the model looks the way it does:** `docs/problems-and-fixes.md` - the problems found during development and the fix for each.

@@ -166,12 +166,12 @@ fit_multistart <- function(objective_fn, lower, upper, seeds, control = list(max
     start_control <- control
     if (is.null(start_control$parscale)) {
       # parscale from each start's own magnitude (floored at 1% of the bound
-      # range), not from upper - lower: when bounds are deliberately wide
+      # range), not from upper - lower: when bounds are wide
       # relative to typical values, bound-width scaling is far too large and
       # L-BFGS-B's step sizing gets stuck near the start. A multistart seed is
       # meant to be in the right neighborhood, so its own magnitude is the better
-      # local-scale estimate. See the `parscale` note under "Choosing between
-      # single_wave and two_wave" in docs/pk-model.md.
+      # local-scale estimate. See "Parameter scaling" under "Fitting
+      # procedure" in docs/pk-model.md.
       start_control$parscale <- pmax(abs(start), 0.01 * bound_range)
     }
     fit <- tryCatch(
