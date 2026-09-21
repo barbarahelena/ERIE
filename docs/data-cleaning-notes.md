@@ -44,7 +44,13 @@ the label when it's present and parses cleanly, and only falls back to the
 position rule (`<= 35` -> FCT1, `> 35` -> FCT2) when it isn't - e.g. the
 since-corrected typo in raw column 34 of `ERIE_fructose_13C.csv`
 (previously `"FCT -  34"`, missing the "1"), which the position rule
-recovered from while the typo existed.
+recovered from while the typo existed. Note that the script does **not**
+cross-check label against position: because the label is trusted when
+present, a real mismatch would silently change which visit a column's data
+is assigned to instead of being flagged. The only automated consistency check
+is that every (subject, visit, time) point in one isotope file also exists in
+the other - both are drawn from the same blood samples - which raises a
+`warning()` otherwise.
 
 Once resolved to `FCT1`/`FCT2`, the value is recoded to `baseline`/
 `intervention` - that's the coded `visit` value used everywhere downstream
@@ -136,17 +142,17 @@ established.
 
 ## Known missingness
 
-- **ER33 and ER34 have no FCT2 data at all** (body weight, both fructose
+- **ER33 and ER34 have no intervention data at all** (body weight, both fructose
   curves) - both are documented study dropouts, consistent with the
   manuscript ("35 participants completing the study compared with the
   intended 40" and per-subject attrition described in Fig. 1). This is
-  expected, not a data error. Their FCT1 weight is deliberately *not*
-  carried forward to fill the missing FCT2 `bw_kg` - both subjects also
-  have no FCT2 concentration data at all, so a filled-in weight would never
+  expected, not a data error. Their baseline weight is deliberately *not*
+  carried forward to fill the missing intervention `bw_kg` - both subjects also
+  have no intervention concentration data at all, so a filled-in weight would never
   be used by anything, and leaving it `NA` is a more honest reflection of
-  what's actually known about their FCT2 visit.
-- Two 13C6 concentration values are slightly negative (ER06 FCT2 t=360:
-  -0.0011 µmol/L; ER27 FCT2 t=240: -0.0172 µmol/L). Both are small in
+  what's actually known about their intervention visit.
+- Two 13C6 concentration values are slightly negative (ER06 intervention t=360:
+  -0.0011 µmol/L; ER27 intervention t=240: -0.0172 µmol/L). Both are small in
   magnitude, at late timepoints where true tracer concentration is near
   zero, and consistent with ordinary assay noise near the limit of
   detection rather than a data-entry error. They are left as-is in the
@@ -161,11 +167,10 @@ or `B`. Diet A is low fructose, with calories matched by glucose
 supplementation; Diet B is high fructose. This is a subject-level
 assignment, fixed across baseline/intervention (the diet intervention
 happens *between* the two visits, not during them), so it's joined into
-`erie_covariates.csv`
-by `subject_id` alone, not `subject_id + visit`. Used by
-`scripts/03_diet_summary.R` for the diet-arm comparison plot, parameter
-table, and paired baseline-vs-intervention comparison (per diet arm); the
-PK fitting itself (`02_fit_erie_model.R`) doesn't need it.
+`erie_covariates.csv` by `subject_id` alone, not `subject_id + visit`. Used
+by `scripts/03_diet_summary.R` for the diet-arm comparisons (see
+`docs/diet-summary.md`); the PK fitting itself (`02_fit_erie_model.R`)
+doesn't need it.
 
 ## Output files
 
@@ -175,4 +180,6 @@ noted:
 - `erie_concentrations.csv` - `subject_id, visit, isotope, time_min, conc_umol_L`
 - `erie_covariates.csv` - one row per subject x visit: `bw_kg, sex, diet, height_cm, dose_12C_mg, dose_13C6_umol, dose_13C6_mg`
 - `erie_constants.csv` - `constant, value, unit`: physical/dosing constants
-- `cleaning_log.txt` - the QC output shown above, regenerated on every run
+  (13C6 dose in mg and µmol, both molecular weights, and the 12C dose per
+  kg). `MW_12C` (180.16 g/mol, unlabeled fructose) is a standard value, not
+  read from the raw files; `MW_13C6` is read from `ERIE_constants.xlsx`.

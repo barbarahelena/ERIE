@@ -8,8 +8,8 @@
 # (or `pixi run test-engine`).
 #
 # These exist because several of this engine's design choices were
-# validated once, by hand, during development (see the code comments they
-# correspond to) but not previously captured anywhere re-runnable:
+# validated once, by hand, during development (see docs/pk-model.md) but not
+# previously captured anywhere re-runnable:
 #   - the closed-form Bateman equation's ka==kel degeneracy
 #   - simulate_delayed_release() reducing to bateman_conc() for very fast
 #     release, which is what "no dissolution delay" should mean

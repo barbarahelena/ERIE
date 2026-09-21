@@ -15,18 +15,12 @@
 # seeds (informed + systematic grid + random) rather than optim() directly.
 #
 # WHY PER-TASK SEEDING, NOT ONE set.seed() BEFORE A PARALLEL LOOP: a single
-# set.seed() call before parallel::mclapply() does NOT make the random
-# starting points reproducible. mclapply reseeds each forked worker using
-# something not deterministically derived from that seed (verified: the
-# same script, same set.seed(), produces different random draws on two
-# separate runs). Even the documented fix (RNGkind("L'Ecuyer-CMRG")) only
-# fixes *that* symptom - which stream a given task draws from is still tied
-# to its fork order/position, so changing core count or task order can
-# silently change which random seeds a given item's fit uses. string_seed()
-# sidesteps all of this: call set.seed(string_seed(<task's own stable ID>))
-# inside the worker function, once per task, and its random draws depend
-# only on that ID - invariant to core count, task order, and how many other
-# tasks exist.
+# set.seed() before parallel::mclapply() does NOT make the random starting
+# points reproducible (verified: same script, same seed, different draws on two
+# runs), and even RNGkind("L'Ecuyer-CMRG") only fixes that for a fixed core
+# count and task order. string_seed() sidesteps this: call
+# set.seed(string_seed(<task's own stable ID>)) inside the worker, so a task's
+# draws depend only on its ID, not on core count, task order or other tasks.
 # =============================================================================
 
 #' Deterministic integer seed from a string, for reproducible per-task
@@ -58,13 +52,9 @@ string_seed <- function(key) {
 #'      optimizer effectively ignores the smaller curve.
 #'   2. WITHIN a curve: points are weighted `1 / max(pred, floor)^2`
 #'      (proportional/constant-CV weighting, floored to avoid blow-up near
-#'      zero). Unweighted SSE lets the peak region dominate a single curve's
-#'      own fit - checking residuals from an unweighted fit against
-#'      predicted concentration showed squared-residual scale differing
-#'      ~24x between the top and bottom quartile of predicted concentration
-#'      (see docs/pk-model.md), which under-weights the tail even after the
-#'      cross-curve normalization above. `floor` is `weight_floor_frac`
-#'      times that curve's own observed Cmax.
+#'      zero). Unweighted SSE lets the peak region dominate a curve's own fit
+#'      when residual scale grows with concentration, under-weighting the tail.
+#'      `floor` is `weight_floor_frac` times that curve's own observed Cmax.
 #'
 #' Because weights depend on `pred`, which changes every evaluation, the
 #' within-curve normalizer (`weighted_ss_tot`) is recomputed at every call
@@ -100,20 +90,11 @@ string_seed <- function(key) {
 #'   fraction of that curve's own observed Cmax.
 #' @param proportional_weighting If TRUE (default), apply the within-curve
 #'   `1/pred^2` weighting described above. If FALSE, use plain per-curve SSE
-#'   normalized only by that curve's own total variance (matching
-#'   `former_models/MixedModel`'s objective exactly) - every observed point
+#'   normalized only by that curve's own total variance - every observed point
 #'   counts equally, including the peak/early region the weighted version
-#'   deliberately discounts. Set to FALSE when fitting a curve whose most
-#'   informative feature IS the peak/early shape (e.g. a sharp early spike a
-#'   sparse tail can't otherwise pin down) - confirmed by direct comparison
-#'   on ER03 FCT1's 13C6 curve, a known-catastrophic fit (R2 = -2.18)
-#'   under the weighted objective: switching to unweighted alone (same
-#'   MIN_TMAX, same bounds, ordinary unseeded multistart) recovered R2 =
-#'   0.37, and former_models/MixedModel's own historical fit for the exact
-#'   same subject - built with an unweighted objective all along - reached
-#'   R2 = 0.71. The weighted default remains appropriate for curves without
-#'   a sharp early feature, where it was added specifically to fix a
-#'   measured ~24x peak-vs-tail heteroscedasticity (see docs/pk-model.md).
+#'   discounts. Use FALSE when a curve's most informative feature is its
+#'   peak/early shape (e.g. a sharp early spike a sparse tail can't pin down).
+#'   See "Fitting procedure" in docs/pk-model.md for why the ERIE fits use FALSE.
 #' @return A function(theta) -> scalar objective value to minimize.
 build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20,
                                    tmax_lambda = 50, weight_floor_frac = 0.01,
@@ -184,30 +165,13 @@ fit_multistart <- function(objective_fn, lower, upper, seeds, control = list(max
     start <- pmax(pmin(start, upper * 0.99), lower * 1.01)
     start_control <- control
     if (is.null(start_control$parscale)) {
-      # A single parscale = upper - lower (the previous default) is only a
-      # good proxy for a parameter's natural scale when its bounds are
-      # already tight around plausible values. Several bounds here are
-      # deliberately wide open (e.g. ka/F in [1e-4, 1], to not bias the
-      # research question) even though real fitted values sit around
-      # 0.01-0.05 - for those, upper-lower is ~20-100x too large, and
-      # L-BFGS-B's step sizing degrades badly enough to get stuck near the
-      # starting point instead of descending. Confirmed concretely on ER11
-      # FCT1 (two_wave): production's own objective (with its MIN_TMAX/CMAX
-      # penalties) scores the reported fit (t_lag=47.3) at 0.208, but a
-      # search using each start's OWN magnitude as parscale finds 0.188 at
-      # t_lag=120 - which lines up with the actual post-peak dip evidence
-      # (trigger_time=150) that justified attempting two_wave in the first
-      # place; the bound-width parscale (ka/F_12C parscale ~1, ~20-70x
-      # their ~0.015 starting values here) reproduces the same stuck
-      # behavior as no parscale at all (both converge to essentially the
-      # same worse point, obj ~0.26-0.28).
-      # Using the start's own magnitude fixes this: a multistart seed is
-      # already meant to be in the right neighborhood (informed by a
-      # pre-fit, evidence-anchored, or a systematic grid/diagonal), so its
-      # magnitude is a far better estimate of the LOCAL natural scale than
-      # the global bound width. Floored at 1% of the bound range so a
-      # near-zero starting value (e.g. f_delayed seeded at 0.001) doesn't
-      # collapse parscale toward zero.
+      # parscale from each start's own magnitude (floored at 1% of the bound
+      # range), not from upper - lower: when bounds are deliberately wide
+      # relative to typical values, bound-width scaling is far too large and
+      # L-BFGS-B's step sizing gets stuck near the start. A multistart seed is
+      # meant to be in the right neighborhood, so its own magnitude is the better
+      # local-scale estimate. See the `parscale` note under "Choosing between
+      # single_wave and two_wave" in docs/pk-model.md.
       start_control$parscale <- pmax(abs(start), 0.01 * bound_range)
     }
     fit <- tryCatch(
@@ -310,7 +274,7 @@ retry_seeds_near_bounds <- function(prior_par, bounds, flagged_params,
 #'   attempted but didn't beat the original, NA if never retried). A row
 #'   that was retried but not improved is informative on its own - it's
 #'   evidence the original result wasn't an under-searched local optimum,
-#'   e.g. a genuinely weak/low-information curve (rather than a search
+#'   e.g. a weak/low-information curve (rather than a search
 #'   failure) is expected to stay flagged even after a denser retry.
 adaptive_retry <- function(results, bound_cols, bounds, par_cols, refit_fn,
                             extra_flag_cols = character(0), convergence_col = NULL,

@@ -103,7 +103,7 @@ diet <- tibble(
 )
 
 # =============================================================================
-# 4. Constants (dose/molecular-weight provenance)
+# 5. Constants (dose/molecular-weight provenance)
 # =============================================================================
 
 const_xlsx <- read_xlsx(file.path(raw_dir, "ERIE_constants.xlsx"), col_names = c("label", "value", "unit"))
@@ -127,7 +127,7 @@ constants <- tribble(
 write_csv(constants, file.path(out_dir, "erie_constants.csv"))
 
 # =============================================================================
-# 5. Covariates (one row per subject x visit)
+# 6. Covariates (one row per subject x visit)
 # =============================================================================
 
 covariates <- bodyweights %>%
