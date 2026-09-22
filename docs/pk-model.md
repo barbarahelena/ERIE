@@ -4,7 +4,7 @@ This documents the pharmacokinetic (PK) model fit by `scripts/02_fit_erie_model.
 
 ## Summary
 
-**What is modelled.** For every subject x visit, two plasma curves come from the same blood draws: 12C-fructose (1 g/kg, drunk as a liquid) and 13C6-fructose (a fixed 120 mg tracer in an enteric capsule). Both are described by one-compartment first-order oral kinetics with the same absorption rate `ka` and elimination rate `kel`, a separate bioavailable fraction `F` per curve, and a volume of distribution `Vd` computed from the subject's weight, height and sex.
+**What is modelled.** For every subject x visit, two plasma curves come from the same blood draws: 12C-fructose (1 g/kg, drunk as a liquid) and 13C6-fructose (a fixed 120 mg tracer in an enteric capsule). Both are described by one-compartment first-order oral kinetics with the same absorption rate `ka` and elimination rate `kel`, a separate bioavailable fraction `F` per curve, and a volume of distribution `Vd` computed from the subject's weight, height, age and sex.
 
 ```
 12C    dose D12 --(ka, F_12C)---------------------> blood --kel--> cleared
@@ -51,7 +51,7 @@ second wave       bateman(t; (1 - f_delayed2_13C6) * D13, F_13C6) + bateman(t - 
 
 `ka` and `kel` are shared by every term in both curves.
 
-**Inputs that are not fitted.** `D12` = 1000 mg x body weight in kg. `D13` = 120 mg. `Vd` is Nadler's blood volume, with `h` in m and `w` in kg: men `0.3669 h^3 + 0.03219 w + 0.6041`, women `0.3561 h^3 + 0.03308 w + 0.1833` (see "Volume of distribution"). 12C concentrations are baseline-corrected (the fasted level is subtracted).
+**Inputs that are not fitted.** `D12` = 1000 mg x body weight in kg. `D13` = 120 mg. `Vd` is the extracellular fluid volume, 0.4 x the measured total body water of that visit in litres (see "Volume of distribution"). 12C concentrations are baseline-corrected (the fasted level is subtracted).
 
 **Parameters.** Which ones exist in a fit depends on the model and mechanism chosen: `single_wave` has `ka`, `kel`, `F_12C`, `F_13C6` and, for 13C6's delayed release, `k_release`. The rest only appear when their mechanism is selected.
 
@@ -69,7 +69,7 @@ second wave       bateman(t; (1 - f_delayed2_13C6) * D13, F_13C6) + bateman(t - 
 
 **How a fit works.** Each subject x visit is fitted with `single_wave`, and with `two_wave` when the raw 12C data show evidence of a second wave (or `single_wave` fits very poorly); the choice between them is made by AIC on 12C's residuals, except that unambiguous dip evidence forces `two_wave`. Every fit uses multi-start bounded optimization (`optim`, L-BFGS-B). The objective of the main fits is, per curve, the squared error divided by that curve's total variance (unweighted), plus two soft penalties: predicted Tmax at least 30 min, and predicted Cmax within +/-10% of the observed Cmax. 13C6's onset-lag and second-wave candidates are refitted afterwards with `ka` and `kel` fixed, using plain squared error. Fits flagged for a bound, a low R² or non-convergence get a denser retry. See "Fitting procedure" and "Choosing between single_wave and two_wave".
 
-**What to trust.** `ka` and `kel` are reasonably well identified. `F` is only interpretable within a subject (for example baseline versus intervention) because `F` and `Vd` enter the model only as `F * D / Vd`; report it as conditional on the Nadler `Vd`. Check `r2_12C`, `r2_13C6`, `converged` and the bound flags before using an individual fit. See "Fit quality and what to trust".
+**What to trust.** `ka` and `kel` are reasonably well identified. `F` is only interpretable within a subject (for example baseline versus intervention) because `F` and `Vd` enter the model only as `F * D / Vd`; report it as conditional on the assumed `Vd`. Check `r2_12C`, `r2_13C6`, `converged` and the bound flags before using an individual fit. See "Fit quality and what to trust".
 
 ## Background: what's being measured
 
@@ -193,20 +193,17 @@ Besides delayed release, 13C6 has two instant-bolus candidates. All three are av
 
 ## Volume of distribution (Vd)
 
-`Vd` is the total blood volume of each subject x visit, computed from weight, height and sex with Nadler's equation:
+`Vd` is the extracellular fluid volume (ECF) of each subject x visit, taken as 40% of the measured total body water (TBW):
 
 ```
-Men:   Vd (L) = 0.3669 x height(m)^3 + 0.03219 x weight(kg) + 0.6041
-Women: Vd (L) = 0.3561 x height(m)^3 + 0.03308 x weight(kg) + 0.1833
+Vd (L) = 0.4 x TBW (L) = TBW / 2.5
 ```
 
-> Nadler DA, Hidalgo JU, Bloch T. *Prediction of blood volume in normal human adults.* Surgery. 1962;51(2):224-232.
+TBW is the litre value per visit in `data/TBW_ERIE.csv`, and the 0.4 is `ECF_FRACTION_OF_TBW` in `scripts/01_clean_data.R`. `Vd` reaches the fits as the `vd_L` column of `erie_covariates.csv`. ER01 and ER03 have no baseline TBW measurement and use their intervention value (`tbw_source` = `other_visit`); see `docs/data-cleaning-notes.md`, which also lists three TBW entries that look wrong (ER033 FCT1, ER001 FCT2, ER009).
 
-It is implemented as `nadler_blood_volume()` in `scripts/assets/pk_curves.R`, which is project-agnostic like the rest of that file.
+The ECF is an assumption about fructose's distribution volume. Fructose is small, freely water-soluble and unbound to protein, so it is expected to equilibrate into interstitial fluid as well as the vascular compartment. For glucose, van der Crabben et al. measured a `Vd` of 191-206 mL/kg across three tracers and showed that it equals the extracellular fluid space (ECFV, about 150-200 mL/kg) and exceeds blood or plasma volume. In this cohort `Vd` averages 200 mL/kg (range 145-255) and is about 3.3 times the mean Nadler blood volume, for women and for men alike. The choice of ECF has not been checked against a fructose-specific `Vd`, and the measurement method of the TBW is not recorded in the data.
 
-Blood volume (about 65-75 mL/kg for a typical adult) is an assumption about fructose's distribution volume. Fructose is small, freely water-soluble and unbound to protein, so it is expected to equilibrate into interstitial fluid as well as the vascular compartment. For glucose, van der Crabben et al. measured a `Vd` of 191-206 mL/kg across three tracers and showed that it equals the extracellular fluid space (ECFV, about 150-200 mL/kg) and exceeds blood or plasma volume. An ECFV-based `Vd` would be 2-3 times larger than the Nadler blood volume and would give correspondingly larger `F` values. This project uses the individual weight, height and sex estimate over a flat per-kg ratio, and the choice of blood volume has not been checked against a fructose-specific `Vd`.
-
-`F` enters the model only as `F * dose / Vd`, so `F` scales with the assumed `Vd`, while `ka` and `kel` do not depend on it. Within-subject comparisons of `F` (baseline vs. intervention) stay valid, because each subject's own Nadler `Vd` applies to both visits and any systematic bias in it cancels in a paired comparison. `Vd` differs between the two visits only when the subject's weight changed.
+`F` enters the model only as `F * dose / Vd`, so `F` scales with the assumed `Vd`, while `ka` and `kel` do not depend on it. Within-subject comparisons of `F` (baseline vs. intervention) cancel any systematic bias in `Vd`. The measured TBW differs between the two visits of a subject by a median of 3.7% (SD 2.2 L, 31 subjects with both values), while body weight differs by 1.6 kg (SD), so a paired `F` comparison also carries the visit-to-visit variation of the TBW measurement.
 
 > van der Crabben SN et al. *Relationship between glucose volume of distribution and the extracellular space: a multiple tracer study.* Metabolism. 2011.
 
@@ -244,7 +241,7 @@ A flagged fit can reflect a weak curve or a search failure, and the per-model re
 
 ## Fit quality and what to trust
 
-In the current run (`results/fit_results.csv`, 68 subject x visit fits) the median R² is 0.975 for the 12C curve (10th percentile 0.916, minimum 0.784) and 0.930 for the 13C6 curve (10th percentile 0.769): 41 of the 13C6 fits are at or above 0.90, 23 between 0.70 and 0.90, 4 below 0.70, and none below 0.30. Per-subject R² is in `results/fit_results.csv`. Check it before trusting an individual subject's parameters, and inspect that subject's plot in `results/plots_individual/` if R² is low.
+In the current run (`results/fit_results.csv`, 68 subject x visit fits) the median R² is 0.975 for the 12C curve (10th percentile 0.916, minimum 0.759) and 0.927 for the 13C6 curve (10th percentile 0.769): 41 of the 13C6 fits are at or above 0.90, 23 between 0.70 and 0.90, 4 below 0.70, and none below 0.30. Per-subject R² is in `results/fit_results.csv`. Check it before trusting an individual subject's parameters, and inspect that subject's plot in `results/plots_individual/` if R² is low.
 
 `results/fit_results.csv` also carries `r2_12C_low` and `r2_13C6_low`, TRUE when that curve's R² falls below `R2_RELIABLE_MIN` (0.70, set in `02_fit_erie_model.R`). They are per-curve flags. A low flag on one curve says nothing by itself about the other curve or about the `ka` and `kel` shared by both, but because `ka` and `kel` are fitted jointly, a poor fit on one curve can still bias them, so a low flag is a prompt to inspect the subject's plot. In the current run the flag is set for 0/68 fits on `r2_12C` and 4/68 on `r2_13C6`.
 
@@ -253,7 +250,7 @@ In the current run (`results/fit_results.csv`, 68 subject x visit fits) the medi
 - Within-subject, paired comparisons (for example baseline vs. intervention `F`): a systematic `Vd` bias applies equally to both visits of a subject and cancels in a paired comparison.
 
 **Interpretable only with caveats:**
-- `F` on its own. `F` and `Vd` enter the model as the product `F * dose / Vd`, so the data identify only their ratio and cannot distinguish a small `F` with a small `Vd` from a large `F` with a large `Vd`. This is a structural limit of oral-only concentration data. An IV tracer dose in the same subjects or a measured individual `Vd` would resolve it, and this protocol has neither. Report `F` conditional on the Nadler `Vd`. Under that `Vd` the median `F_12C` and the median `F_13C6` are both about 1.9% in the current run (ranges 0.8-6.8% and 0.4-8.0%). These values are low and have not been compared with a literature fructose or glucose bioavailability at a comparable dose. Substantially higher literature values would indicate that the Nadler blood volume is too small for fructose's distribution volume (see "Volume of distribution").
+- `F` on its own. `F` and `Vd` enter the model as the product `F * dose / Vd`, so the data identify only their ratio and cannot distinguish a small `F` with a small `Vd` from a large `F` with a large `Vd`. This is a structural limit of oral-only concentration data. An IV tracer dose in the same subjects or a measured individual `Vd` would resolve it, and this protocol has neither (the measured TBW fixes the total water, and the ECF share of it is assumed). Report `F` conditional on the assumed `Vd` (0.4 x measured TBW). The `F` values have not been compared with a literature fructose or glucose bioavailability at a comparable dose (see "Volume of distribution").
 - Any boundary-flagged parameter (`kel_at_bound` or `k_release_at_bound` = TRUE). After the retry the data may still leave the parameter at the bound, for example `k_release` at its ceiling because the first post-dose sample already shows near-peak tracer concentration and nothing argues for slower dissolution, which is a sampling-resolution limit. A flag that survives the retry (`retried = TRUE, retry_improved = FALSE`) is more informative than one from a single pass, but it cannot separate "unconstrained by the data" from "the search missed it", so inspect the plot either way.
 - Any fit with `converged = FALSE`. The winning multi-start result did not meet `optim()`'s convergence criterion (it had the lowest objective among the seeds tried), typically because it reached the `maxit` cap.
 - Extrapolated quantities (for example AUC beyond 360 min or the time to full clearance) are projections beyond the last observation.
@@ -275,7 +272,7 @@ The model follows the final joint model of `former_models/MixedModel/Scripts/fru
 
 ### R² compared with the former model
 
-`scripts/04_compare_to_former_model.R` (`pixi run compare-former`) compares each subject x visit's classical R² (`1 - SSE/SS_tot` on the observed points) with the former model's saved results (`former_models/MixedModel/Results/fit_results_joint.csv`). In the current run the median 12C R² is 0.975 (former: 0.933), higher for 57 of 68 subject x visits and lower for 11; the median 13C6 R² is 0.930 (former: 0.793), higher for 58 and lower for 10. Per-subject numbers are in `results/r2_comparison_vs_former_model.csv`, the summary in `results/r2_comparison_summary.csv`, and a scatter plot in `results/r2_comparison_plot.pdf`. The correlation between former and current R² across subject x visits is modest (0.37 for both isotopes).
+`scripts/04_compare_to_former_model.R` (`pixi run compare-former`) compares each subject x visit's classical R² (`1 - SSE/SS_tot` on the observed points) with the former model's saved results (`former_models/MixedModel/Results/fit_results_joint.csv`). In the current run the median 12C R² is 0.975 (former: 0.933), higher for 57 of 68 subject x visits and lower for 11; the median 13C6 R² is 0.927 (former: 0.793), higher for 58 and lower for 10. Per-subject numbers are in `results/r2_comparison_vs_former_model.csv`, the summary in `results/r2_comparison_summary.csv`, and a scatter plot in `results/r2_comparison_plot.pdf`. The correlation between former and current R² across subject x visits is modest (0.36 for 12C and 0.38 for 13C6).
 
 R² is a fair yardstick between the two: the objective is unweighted and normalized by each curve's own total variance, like the former model's, so both optimize essentially the quantity R² measures. R² does not penalize the extra parameters of `two_wave` and of 13C6's mechanisms, so a higher R² alone does not show a better model; for 12C the AIC-based selection accounts for them.
 
@@ -284,4 +281,3 @@ R² is a fair yardstick between the two: the objective is unweighted and normali
 - Hannou SA, Haslam DE, McKeown NM, Herman MA. *Fructose metabolism and metabolic disease.* J Clin Invest. 2018;128(2):545-555.
 - Jang C, Hui S, Litchfield B, et al. *The small intestine converts dietary fructose into glucose and organic acids.* Cell Metabolism. 2018;27(2):351-361.
 - van der Crabben SN, et al. *Relationship between glucose volume of distribution and the extracellular space: a multiple tracer study.* Metabolism. 2011.
-- Nadler DA, Hidalgo JU, Bloch T. *Prediction of blood volume in normal human adults.* Surgery. 1962;51(2):224-232.

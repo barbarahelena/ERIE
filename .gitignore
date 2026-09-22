@@ -11,5 +11,14 @@ former_models/
 results/
 
 # pixi environments
-.pixi/*
+.pixi/
 !.pixi/config.toml
+
+# VSCode
+.vscode/
+
+# Claude
+.claude/
+
+# macOS
+.DS_Store

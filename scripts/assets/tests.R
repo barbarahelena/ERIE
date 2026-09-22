@@ -181,4 +181,14 @@ check("adaptive_retry()'s retried/retry_improved columns distinguish never-flagg
     out$retried[4] == TRUE && isFALSE(out$retry_improved[4]) && out$a[4] == 4     # retried, not improved, original kept
 })
 
+# ---- watson_ecf_volume(): hand-computed TBW / 3 ------------------------------
+
+check("watson_ecf_volume() matches hand-computed values, and only males use age", {
+  male   <- watson_ecf_volume(80, 180, 40, "Male")     # (2.447 - 3.8064 + 19.332 + 26.896) / 3
+  female <- watson_ecf_volume(60, 165, 40, "female")   # (-2.097 + 17.6385 + 14.796) / 3
+  abs(male - 14.9562) < 1e-4 && abs(female - 10.1125) < 1e-4 &&
+    watson_ecf_volume(60, 165, NA, "female") == female &&
+    is.na(watson_ecf_volume(80, 180, NA, "male"))
+})
+
 cat("\nAll", n_pass, "tests passed.\n")

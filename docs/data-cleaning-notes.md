@@ -13,6 +13,7 @@ All raw files live in `data/` and are untouched by the cleaning script - it only
 | `ERIE_weight.csv` | Wide (single row!), semicolon-delimited, comma decimals; replaced by `weight_height_data_ERIE.csv`, see below |
 | `weight_height_data_ERIE.csv` | Tidy-ish, 3-digit subject IDs, one column quoted for no obvious reason |
 | `ERIE_metadata_sex.csv` | Tidy already, but a different subject-ID format |
+| `TBW_ERIE.csv` | Tidy-ish, 3-digit subject IDs, empty strings for missing visits, one `TBW_pct` value that is a copy of the litre value |
 | `ERIE_constants.csv` / `.xlsx` | Two files, disagree on one value |
 | `ERIE_Diets.xlsx` | Tidy already, 2-digit subject IDs - no reformatting needed |
 
@@ -39,9 +40,21 @@ Once resolved to `FCT1`/`FCT2`, the value is recoded to `baseline`/ `interventio
 
 ## Weight and height: `weight_height_data_ERIE.csv`
 
-This file replaces `ERIE_weight.csv` (which stays in `data/` and is read by no script). It has one row per subject with `dem_height` (cm, constant across visits), `fct1_gewicht` and `fct2_gewicht` (kg, one column per visit), and the height is needed for the weight+height-based Vd formula in `scripts/assets/pk_curves.R` (see "Volume of distribution" in `docs/pk-model.md`).
+This file replaces `ERIE_weight.csv` (which stays in `data/` and is read by no script). It has one row per subject with `dem_height` (cm, constant across visits), `fct1_gewicht` and `fct2_gewicht` (kg, one column per visit).
 
 `fct2_gewicht` is double-quoted in the raw CSV (`fct1_gewicht` is unquoted) for no apparent reason, including `""` for ER33/ER34's missing FCT2 weight. `readr::read_csv()` infers the column as numeric (quoting in CSV only escapes delimiters) and turns `""` into `NA`, so no special handling is needed.
+
+## Age: `Age_df.csv`
+
+`Age_df.csv` has one row per subject (`Subject_ID` with 3-digit IDs like the sex file, and `Age_screening` in years) and covers all 35 subjects. It is the age at screening and is used unchanged for both visits. Age goes into `erie_covariates.csv`, and no model input uses it.
+
+## Total body water: `TBW_ERIE.csv`
+
+This file has one row per subject with the measured total body water in litres (`FCT1_TBW_L`, `FCT2_TBW_L`) and as a percentage of body weight (`FCT1_TBW_pct`, `FCT2_TBW_pct`). It uses 3-digit subject IDs, and the file does not state how TBW was measured. Vd is 0.4 x the litre value (see "Volume of distribution" in `docs/pk-model.md`), and `TBW_pct` is read by no script.
+
+Four visits have an empty value: FCT1 for ER001 and ER003 (no measurement), and FCT2 for ER033 and ER034 (the study dropouts described below). A visit that took place but has no TBW takes the subject's TBW from their other visit, which affects ER01 and ER03 baseline and is recorded in the `tbw_source` column of `erie_covariates.csv` (`measured` or `other_visit`). The dropouts' intervention visits stay empty.
+
+Three entries look wrong and are used as they stand. ER033 FCT1 is 57.1 L, which is 63.8% of body weight for a 160 cm, 89.5 kg woman and 20 L above the Watson estimate. ER001 FCT2 has `TBW_pct` = 48.52, the same as its litre value, while 48.52 L / 101 kg is 48.04%. ER009 has identical FCT1 and FCT2 values in both columns (46.02 L, 48.44%) and the same body weight at both visits, so one visit may be a copy of the other. Every other `TBW_pct` matches `TBW_L` / body weight to within rounding.
 
 ## The 13C6 tracer dose discrepancy
 
@@ -78,5 +91,5 @@ Separately, the manuscript's Methods section and every prior model script in `fo
 All in `data/processed/`, one row per (subject, visit, isotope, time) unless noted:
 
 - `erie_concentrations.csv` - `subject_id, visit, isotope, time_min, conc_umol_L`
-- `erie_covariates.csv` - one row per subject x visit: `bw_kg, sex, diet, height_cm, dose_12C_mg, dose_13C6_umol, dose_13C6_mg`
+- `erie_covariates.csv` - one row per subject x visit: `bw_kg, sex, age_years, diet, height_cm, tbw_l, tbw_source, vd_L, dose_12C_mg, dose_13C6_umol, dose_13C6_mg`
 - `erie_constants.csv` - `constant, value, unit`: physical/dosing constants (13C6 dose in mg and µmol, both molecular weights, and the 12C dose per kg). `MW_12C` (180.16 g/mol, unlabeled fructose) is a standard value; `MW_13C6` is read from `ERIE_constants.xlsx`.
