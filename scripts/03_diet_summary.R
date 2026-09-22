@@ -496,7 +496,9 @@ write_csv(curve_metrics, "results/diet_curve_metrics.csv")
 # random intercept, one model per metric x isotope. AUC and Cmax stay on the log
 # scale like the fitted parameters; Tmax stays on its raw minutes scale, as in the
 # paired test below. See "Linear mixed models" in docs/diet-summary.md.
-metric_covariates <- fits %>% distinct(subject_id, visit, sex, age_years, bw_kg)
+metric_covariates <- fits %>%
+  filter(reliable) %>%
+  distinct(subject_id, visit, sex, age_years, bw_kg)
 
 fit_metric_lmm <- function(metric_name, isotope_val, log_scale) {
   d <- curve_metrics %>% filter(isotope == isotope_val) %>%
