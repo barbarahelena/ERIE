@@ -1,6 +1,6 @@
 # Problems and fixes
 
-This document records the problems found during model development and how each was resolved. It is the history behind the current design. The current behavior is described in `docs/pk-model.md`, `docs/diet-summary.md` and `docs/data-cleaning-notes.md`. Entries are grouped by topic and carry the commit that made the change where one is identifiable (`git show <hash>`). Subject-visit cases are written as subject ID plus visit (`baseline` or `intervention`).
+This document records the problems found during model development and how each was resolved. It is the history behind the current design. The current behavior is described in `docs/pk-model.md` and `docs/data-cleaning-notes.md`. Entries are grouped by topic and carry the commit that made the change where one is identifiable (`git show <hash>`). Subject-visit cases are written as subject ID plus visit (`baseline` or `intervention`).
 
 ## Model structure
 
@@ -71,6 +71,10 @@ With 12C selected as `two_wave`, 13C6 could only use delayed release with 12C's 
 ### A second-wave result at the lower bound (477a932)
 
 ER18 intervention won its AIC comparison at `f_delayed2_13C6` = 0.05 and `t_lag2_13C6` = 150, both at their bounds, although its dip evidence lies at t=120. A result within 1e-3 of the lower bound of `f_delayed2_13C6` is now rejected without an AIC comparison. ER18 intervention falls back to delayed release with `r2_13C6` = 0.66 (0.71 with the spurious second wave).
+
+### R² compared with the former model (`04_compare_to_former_model.R`, removed 2026-09-22)
+
+A one-off script compared each subject x visit's classical R² with the former model's saved results (`former_models/MixedModel/Results/fit_results_joint.csv`), to check that the current joint model was actually an improvement before relying on it. In its last run the median 12C R² was 0.975 against the former model's 0.933 (higher for 57 of 68 subject x visits, lower for 11), and the median 13C6 R² was 0.927 against 0.793 (higher for 58, lower for 10); the correlation between former and current R² across subject x visits was modest (0.36 for 12C, 0.38 for 13C6). R² was a fair yardstick between the two: both objectives are unweighted and normalized by each curve's own total variance. The comparison script and its outputs (`r2_comparison_*.csv/pdf`) were removed once this was established.
 
 ## Fitting
 

@@ -84,7 +84,7 @@ Separately, the manuscript's Methods section and every prior model script in `fo
 
 ## Diet group assignment
 
-`data/ERIE_Diets.xlsx` (copied from `former_models/MixedModel/Data/`) gives one row per subject: `Diet` = `A` or `B`. Diet A is low fructose, with calories matched by glucose supplementation; Diet B is high fructose. This is a subject-level assignment that stays fixed across baseline and intervention (the diet intervention happens between the two visits), so it is joined into `erie_covariates.csv` by `subject_id` alone. Used by `scripts/03_diet_summary.R` for the diet-arm comparisons (see `docs/diet-summary.md`); the PK fitting itself (`02_fit_erie_model.R`) doesn't need it.
+`data/ERIE_Diets.xlsx` (copied from `former_models/MixedModel/Data/`) gives one row per subject: `Diet` = `A` or `B`. Diet A is low fructose, with calories matched by glucose supplementation; Diet B is high fructose. This is a subject-level assignment that stays fixed across baseline and intervention (the diet intervention happens between the two visits), so it is joined into `erie_covariates.csv` by `subject_id` alone. Used by `scripts/03_diet_summary.R` for the diet-arm comparisons; the PK fitting itself (`02_fit_erie_model.R`) doesn't need it.
 
 ## Output files
 
