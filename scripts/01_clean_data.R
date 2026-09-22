@@ -160,7 +160,9 @@ covariates <- bodyweights %>%
   mutate(
     tbw_source = case_when(!is.na(tbw_l) ~ "measured",
                            !is.na(bw_kg) & any(!is.na(tbw_l)) ~ "other_visit"),
-    tbw_l      = if_else(tbw_source == "other_visit", mean(tbw_l, na.rm = TRUE), tbw_l)
+    tbw_l      = if_else(tbw_source == "other_visit",
+                         first(tbw_l[!is.na(tbw_l)], default = NA_real_),
+                         tbw_l)
   ) %>%
   ungroup() %>%
   mutate(
