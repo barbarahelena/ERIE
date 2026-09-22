@@ -502,7 +502,7 @@ metric_covariates <- fits %>%
 
 fit_metric_lmm <- function(metric_name, isotope_val, log_scale) {
   d <- curve_metrics %>% filter(isotope == isotope_val) %>%
-    left_join(metric_covariates, by = c("subject_id", "visit")) %>%
+    inner_join(metric_covariates, by = c("subject_id", "visit")) %>%
     transmute(subject_id, diet, visit, sex, age_years, bw_kg, value = .data[[metric_name]])
   run_lmm(d, sprintf("%s_%s", metric_name, isotope_val), log_scale = log_scale)
 }
