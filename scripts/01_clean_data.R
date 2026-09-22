@@ -1,9 +1,5 @@
 # Data cleaning of ERIE data
 # Barbara Verhaar
-#
-# Rationale for the non-obvious decisions below (column-to-subject mapping,
-# per-file decimal marks, subject ID convention, tracer dose default) is in
-# docs/data-cleaning-notes.md.
 
 # Libraries
 suppressMessages({

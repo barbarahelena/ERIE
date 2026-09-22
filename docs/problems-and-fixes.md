@@ -1,6 +1,6 @@
 # Problems and fixes
 
-This document records the problems found during model development and how each was resolved. It is the history behind the current design. The current behavior is described in `docs/pk-model.md`, `docs/diet-summary.md` and `docs/data-cleaning-notes.md`. Entries are grouped by topic and carry the commit that made the change where one is identifiable (`git show <hash>`). Subject-visit cases are written as subject ID plus visit (`baseline` or `intervention`).
+This document records the problems found during model development and how each was resolved. It is the history behind the current design. The current behavior is described in `docs/pk-model.md` and `docs/diet-summary.md`. Entries are grouped by topic and carry the commit that made the change where one is identifiable (`git show <hash>`). Subject-visit cases are written as subject ID plus visit (`baseline` or `intervention`).
 
 ## Model structure
 
@@ -102,7 +102,7 @@ A single `set.seed()` before `parallel::mclapply()` gave different random draws 
 
 Vd was first a flat 0.15 L/kg (an extracellular fluid volume estimate from glucose literature) and is now the individual Nadler blood volume from weight, height and sex. Blood volume (about 65 to 75 mL/kg) is much smaller than the ECFV (about 150 to 200 mL/kg), so `F_12C` and `F_13C6` became smaller and cannot be compared with results from before the change. `ka` and `kel` are unaffected. In an earlier run under the Nadler Vd the median `F_12C` was about 3.2% and the median `F_13C6` about 3.0%; the current medians are about 1.9%. The argument for ECFV (Vd of glucose equals the extracellular space, van der Crabben et al. 2011) was not refuted, and the choice of blood volume has not been checked against a fructose-specific Vd.
 
-The 13C6 dose is 120 mg / 644.78 µmol. The raw constants files implied about 100 mg, and the administered dose was confirmed as 120 mg (2026-09-17), which made the molar amount in the files wrong as well. A larger assumed dose gives a somewhat smaller `F_13C6` and leaves `ka` and `kel` unchanged (see `docs/data-cleaning-notes.md`).
+The 13C6 dose is 120 mg / 644.78 µmol. The raw constants files implied about 100 mg, and the administered dose was confirmed as 120 mg (2026-09-17), which made the molar amount in the files wrong as well. A larger assumed dose gives a somewhat smaller `F_13C6` and leaves `ka` and `kel` unchanged.
 
 ## Diet summary
 
@@ -120,12 +120,11 @@ The 13C6 dose is 120 mg / 644.78 µmol. The raw constants files implied about 10
 - **Visit labels (d7b46f8, 2026-09-17).** `visit` is recoded from `FCT1`/`FCT2` to `baseline`/`intervention` in `01_clean_data.R`, and every downstream script and doc uses the coded values. The visit label is part of each fit's random seed.
 - **Raw label typo.** Raw column 34 of `ERIE_fructose_13C.csv` had a label typo (`"FCT -  34"`, missing the "1"), which the position fallback for the visit recovered from. The raw file has since been corrected.
 - **Output names.** The selected-model table is `fit_results.csv` (formerly `fit_results_joint.csv`), and `04_compare_to_former_model.R` reads it (0a3df8a).
-- **Data findings.** The decimal-mark mismatch between raw files, the 13C6 dose discrepancy and the column-to-subject mapping are documented in `docs/data-cleaning-notes.md`.
+- **Data findings.** A decimal-mark mismatch between raw files (comma in some, period in others) and an undocumented column-to-subject mapping (reverse-engineered from `former_models/`) were found and handled in `01_clean_data.R`; see the 13C6 dose discrepancy above for the same kind of issue.
 
 ## Documentation corrections
 
 - The dip prevalence figures of an earlier version (13/68 dips, about 31% of curves with a smaller-amplitude version, 85% of dips at t=60 or t=90) came from a stricter trough-then-rise check. They are replaced by counts from the current detectors (see `docs/pk-model.md`).
 - A statement that 45 of 68 13C6 fits fall below R² 0.70 described an earlier model. The current run has 4 of 68.
 - A section explaining a lower R² than the former model by the proportional weighting described the earlier weighted objective. The current R² is higher for 57 of 68 (12C) and 58 of 68 (13C6) subject x visits.
-- `data-cleaning-notes.md` described a label-versus-position warning and a `cleaning_log.txt`. The cleaning script has neither.
 - `t_lag`'s lower bound was documented as an interpolation with `EARLY_LAG_BAD_MGL`, and the `ka` and `kel` issue as an open TODO. The step function and the diagonal seeds are documented instead.
