@@ -63,7 +63,7 @@ FINE_T_DIET <- seq(0, 400, by = 2)
 # Inclusion cutoff for this script's plots/statistics - separate from, and
 # stricter than, 02_fit_erie_model.R's R2_RELIABLE_MIN (see "Which fits are
 # included" in docs/diet-summary.md).
-R2_INCLUDE_MIN <- 0.9
+R2_INCLUDE_MIN <- 0.75
 
 # Open data
 results      <- read_csv("results/fit_results.csv", show_col_types = FALSE)
@@ -72,13 +72,13 @@ constants    <- read_csv("data/processed/erie_constants.csv", show_col_types = F
 dose_13C6_mg <- constants$value[constants$constant == "tracer_13C6_dose_mg"]
 
 fits <- results %>%
-  left_join(covariates %>% select(subject_id, visit, bw_kg, height_cm, age_years, sex, diet), by = c("subject_id", "visit")) %>%
+  left_join(covariates %>% select(subject_id, visit, bw_kg, vd_L, sex, age_years, diet), by = c("subject_id", "visit")) %>%
   filter(!is.na(ka))
 
 fits <- fits %>%
   filter(!is.na(diet)) %>%
   mutate(
-    Vd = watson_ecf_volume(bw_kg, height_cm, age_years, sex),
+    Vd = vd_L,
     dose_12C_mg = 1000 * bw_kg,
     # Reliable = 12C's fit isn't stuck at the shared kel bound and its R2 clears
     # R2_INCLUDE_MIN, applied to every parameter. `converged` is not
@@ -87,9 +87,8 @@ fits <- fits %>%
   )
 
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
-# Vd is a deterministic function of weight/height/age/sex, not a fit result, so it
-# isn't gated on `reliable` and is shown once per subject (mean over visits) as
-# a covariate-balance check. See "Outputs" in docs/diet-summary.md.
+# Vd is 0.4 x the measured TBW, not a fit result, so it isn't gated on `reliable`
+# and is shown once per subject (mean over visits) as a covariate-balance check. See "Outputs" in docs/diet-summary.md.
 
 vd_data <- fits %>% group_by(subject_id, diet, sex) %>%
   summarise(Vd = mean(Vd), .groups = "drop")
@@ -99,7 +98,7 @@ p_vd <- ggplot(vd_data, aes(diet, Vd, fill = diet)) +
   geom_jitter(aes(shape = sex), width = 0.08, size = 1.8, alpha = 0.8) +
   scale_x_discrete(labels = DIET_LABELS) +
   scale_fill_manual(values = DIET_COLORS, guide = "none") +
-  labs(title = "Watson-estimated extracellular fluid volume (Vd) by diet arm",
+  labs(title = "Extracellular fluid volume (Vd = 0.4 x measured TBW) by diet arm",
        x = NULL, y = "Vd (L)", shape = "Sex") +
   theme_Publication()
 
@@ -164,32 +163,33 @@ print(as.data.frame(param_table), digits = 3)
 # intercept for the paired baseline/intervention observations. See "Linear mixed models" in
 # docs/diet-summary.md.
 
-# Modelled on the log scale, with sex as a fixed-effect covariate (rationale in
-# docs/diet-summary.md).
-fit_lmm <- function(param) {
-  d <- fits %>% filter(reliable) %>%
-    select(subject_id, diet, visit, sex, value = all_of(param)) %>%
-    mutate(value = log(value))
+# Modelled on the log scale, with sex, age and body weight as fixed-effect
+# covariates (rationale in docs/diet-summary.md). Shared by the fitted
+# parameters here and the curve-derived metrics (AUC, Cmax, Tmax) further down,
+# once those are computed.
+run_lmm <- function(d, label, log_scale = TRUE) {
+  if (log_scale) d <- d %>% mutate(value = log(value))
   n_subjects_both <- d %>% count(subject_id) %>% filter(n == 2) %>% nrow()
   if (n_subjects_both < 3) {
-    warning(param, ": fewer than 3 subjects with both visits reliable - skipping LMM")
+    warning(label, ": fewer than 3 subjects with both visits reliable - skipping LMM")
     return(NULL)
   }
-  model <- lmer(value ~ diet * visit + sex + (1 | subject_id), data = d)
+  model <- lmer(value ~ diet * visit + sex + age_years + bw_kg + (1 | subject_id), data = d)
   a <- anova(model)  # Type III, Satterthwaite df (lmerTest default)
-  tibble(parameter = param, term = rownames(a), `F` = a$`F value`, df1 = a$NumDF, df2 = a$DenDF, p = a$`Pr(>F)`)
+  tibble(parameter = label, term = rownames(a), `F` = a$`F value`, df1 = a$NumDF, df2 = a$DenDF, p = a$`Pr(>F)`)
 }
 
-lmm_results <- bind_rows(
+fit_lmm <- function(param) {
+  d <- fits %>% filter(reliable) %>% select(subject_id, diet, visit, sex, age_years, bw_kg, value = all_of(param))
+  run_lmm(d, param)
+}
+
+lmm_results_params <- bind_rows(
   fit_lmm("ka"),
   fit_lmm("kel"),
   fit_lmm("F_12C"),
   fit_lmm("F_13C6")
-) %>% arrange(parameter, term)
-
-write_csv(lmm_results, "results/diet_lmm_results.csv")
-cat("\n=== LMM (diet x visit, subject random intercept): F-tests ===\n")
-print(as.data.frame(lmm_results), digits = 3)
+)
 
 # ---- Boxplot: diet x visit distributions for each parameter ---------------
 PARAM_LABELS <- c(ka = "ka (1/min)", kel = "kel (1/min)", F_12C = "F[12C]", F_13C6 = "F[13C6]")
@@ -225,7 +225,6 @@ for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
     cat("\nSaved", out_path, "\n")
   }
 }
-cat("Saved results/diet_lmm_results.csv\n")
 
 # ---- Delta plots: within-subject before/after diet change, by diet arm ----
 # Per-subject log fold-change (log(intervention) - log(baseline)) for subjects with both
@@ -361,8 +360,8 @@ if (nrow(two_wave_params) >= 4) {
 # Must mirror simulate_fit() in 02_fit_erie_model.R exactly: the mechanism that
 # won for each subject x visit determines the curve, and a mismatch (e.g. feeding
 # k_release = NA to simulate_delayed_release()) blanks a whole group's mean. See
-# "Mean concentration-time curves" in docs/diet-summary.md.
-average_curve_isotope <- function(diet_val, vis, isotope) {
+# "Median and mean concentration-time curves" in docs/diet-summary.md.
+curve_matrix <- function(diet_val, vis, isotope) {
   sub <- fits %>% filter(diet == diet_val, visit == vis, reliable)
   if (nrow(sub) == 0) return(NULL)
 
@@ -391,18 +390,55 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
     }
   })
   conc_mat <- do.call(cbind, conc_list)
+  colnames(conc_mat) <- sub$subject_id
+  conc_mat
+}
+
+# Pointwise Harrell-Davis median (rows = time points, columns = subjects): a
+# weighted average of the sorted subject values, so it changes smoothly where
+# subjects swap rank.
+hd_median_rows <- function(m) {
+  n <- ncol(m)
+  w <- diff(pbeta(0:n / n, (n + 1) / 2, (n + 1) / 2))
+  drop(crossprod(apply(m, 1, sort), w))
+}
+
+BOOT_N    <- 1000
+BOOT_SEED <- 1
+
+average_curve_isotope <- function(diet_val, vis, isotope) {
+  conc_mat <- curve_matrix(diet_val, vis, isotope)
+  if (is.null(conc_mat)) return(NULL)
+  n <- ncol(conc_mat)
+
+  # 95% percentile bootstrap CI of the median: resample subjects (columns).
+  set.seed(BOOT_SEED)
+  boot <- replicate(BOOT_N, hd_median_rows(conc_mat[, sample.int(n, replace = TRUE), drop = FALSE]))
+  ci   <- apply(boot, 1, quantile, probs = c(0.025, 0.975))
+  sem  <- apply(conc_mat, 1, sd) / sqrt(n)
 
   tibble(
-    time_min  = FINE_T_DIET,
-    mean_conc = rowMeans(conc_mat),
-    sem_conc  = apply(conc_mat, 1, sd) / sqrt(ncol(conc_mat)),
-    n         = ncol(conc_mat)
+    time_min    = FINE_T_DIET,
+    median_conc = hd_median_rows(conc_mat),
+    median_lo   = ci[1, ],
+    median_hi   = ci[2, ],
+    mean_conc   = rowMeans(conc_mat),
+    mean_lo     = mean_conc - sem,
+    mean_hi     = mean_conc + sem,
+    n           = n
   )
 }
 
-# Faceted by diet arm with baseline/intervention overlaid by colour, one PDF per isotope
-# (12C and 13C6 differ ~1000x in concentration).
-plot_diet_curves <- function(isotope_val) {
+# Faceted by diet arm with baseline/intervention overlaid by colour, one PDF per
+# statistic (median with bootstrap CI band, mean with SEM band) and isotope (12C
+# and 13C6 differ ~1000x in concentration). The y-axis is shared across the two
+# diet panels.
+CURVE_STATS <- list(
+  median = list(cols = c("median_conc", "median_lo", "median_hi"), title = "Median %s concentration (95%% bootstrap CI)"),
+  mean   = list(cols = c("mean_conc", "mean_lo", "mean_hi"),       title = "Mean %s concentration (SEM band)")
+)
+
+plot_diet_curves <- function(isotope_val, stat) {
   curves <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("baseline", "intervention")) %>%
     pmap_dfr(function(diet, visit) {
       ac <- average_curve_isotope(diet, visit, isotope_val)
@@ -411,25 +447,128 @@ plot_diet_curves <- function(isotope_val) {
     })
   if (nrow(curves) == 0) return(NULL)
 
-  ggplot(curves, aes(time_min, mean_conc, color = visit, fill = visit)) +
-    geom_ribbon(aes(ymin = mean_conc - sem_conc, ymax = mean_conc + sem_conc), alpha = 0.2, color = NA) +
+  cols <- CURVE_STATS[[stat]]$cols
+  ggplot(curves, aes(time_min, .data[[cols[1]]], color = visit, fill = visit)) +
+    geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]), alpha = 0.2, color = NA) +
     geom_line(linewidth = 0.9) +
-    facet_wrap(vars(diet), nrow = 1, scales = "free_y", labeller = labeller(diet = DIET_LABELS)) +
+    facet_wrap(vars(diet), nrow = 1, labeller = labeller(diet = DIET_LABELS)) +
+    scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
     scale_color_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
-    labs(title = sprintf("Mean %s concentration: baseline vs intervention within each diet arm", ISOTOPE_LABELS[[isotope_val]]),
+    labs(title = sprintf(paste0(CURVE_STATS[[stat]]$title, ": baseline vs intervention"), ISOTOPE_LABELS[[isotope_val]]),
          x = "Time (min)", y = "Concentration (mg/L)") +
     theme_Publication()
 }
 
-p_12C <- plot_diet_curves("12C")
-if (!is.null(p_12C)) {
-  ggsave("results/diet_summary_curves_12C.pdf", p_12C, width = 9, height = 5, dpi = 150)
-  cat("\nSaved results/diet_summary_curves_12C.pdf\n")
+for (stat in names(CURVE_STATS)) {
+  for (isotope_val in c("12C", "13C6")) {
+    p <- plot_diet_curves(isotope_val, stat)
+    if (!is.null(p)) {
+      out_path <- sprintf("results/diet_summary_curves_%s_%s.pdf", stat, isotope_val)
+      ggsave(out_path, p, width = 9, height = 5, dpi = 150)
+      cat("\nSaved", out_path, "\n")
+    }
+  }
 }
-p_13C6 <- plot_diet_curves("13C6")
-if (!is.null(p_13C6)) {
-  ggsave("results/diet_summary_curves_13C6.pdf", p_13C6, width = 9, height = 5, dpi = 150)
-  cat("\nSaved results/diet_summary_curves_13C6.pdf\n")
+# ---- Curve-derived PK metrics (AUC, Cmax, Tmax) per subject x visit -------
+# Cmax and Tmax come from each subject's simulated fitted curve on FINE_T_DIET. See "Curve-derived
+# metrics" in docs/diet-summary.md.
+curve_metrics <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("baseline", "intervention"),
+                             isotope = c("12C", "13C6")) %>%
+  pmap_dfr(function(diet, visit, isotope) {
+    m <- curve_matrix(diet, visit, isotope)
+    if (is.null(m)) return(NULL)
+    f <- fits[match(paste(colnames(m), visit), paste(fits$subject_id, fits$visit)), ]
+    # AUC to infinity: every mechanism delivers F * dose to the blood and kel clears it.
+    dose_iso <- if (isotope == "12C") f$dose_12C_mg else dose_13C6_mg
+    F_iso    <- if (isotope == "12C") f$F_12C else f$F_13C6
+    tibble(
+      subject_id = colnames(m), diet = diet, visit = visit, isotope = isotope,
+      AUC  = F_iso * dose_iso / (f$Vd * f$kel),
+      Cmax = apply(m, 2, max),
+      Tmax = FINE_T_DIET[apply(m, 2, which.max)]
+    )
+  })
+write_csv(curve_metrics, "results/diet_curve_metrics.csv")
+
+# Extends the parameter LMMs above to the curve-derived metrics, same formula and
+# random intercept, one model per metric x isotope. AUC and Cmax stay on the log
+# scale like the fitted parameters; Tmax stays on its raw minutes scale, as in the
+# paired test below. See "Linear mixed models" in docs/diet-summary.md.
+metric_covariates <- fits %>% distinct(subject_id, visit, sex, age_years, bw_kg)
+
+fit_metric_lmm <- function(metric_name, isotope_val, log_scale) {
+  d <- curve_metrics %>% filter(isotope == isotope_val) %>%
+    left_join(metric_covariates, by = c("subject_id", "visit")) %>%
+    transmute(subject_id, diet, visit, sex, age_years, bw_kg, value = .data[[metric_name]])
+  run_lmm(d, sprintf("%s_%s", metric_name, isotope_val), log_scale = log_scale)
 }
+
+lmm_results_metrics <- bind_rows(
+  fit_metric_lmm("AUC", "12C", log_scale = TRUE),
+  fit_metric_lmm("AUC", "13C6", log_scale = TRUE),
+  fit_metric_lmm("Cmax", "12C", log_scale = TRUE),
+  fit_metric_lmm("Cmax", "13C6", log_scale = TRUE),
+  fit_metric_lmm("Tmax", "12C", log_scale = FALSE),
+  fit_metric_lmm("Tmax", "13C6", log_scale = FALSE)
+)
+
+lmm_results <- bind_rows(lmm_results_params, lmm_results_metrics) %>% arrange(parameter, term)
+write_csv(lmm_results, "results/diet_lmm_results.csv")
+cat("\n=== LMM (diet x visit, subject random intercept): F-tests ===\n")
+print(as.data.frame(lmm_results), digits = 3)
+
+curve_metrics_summary <- curve_metrics %>%
+  pivot_longer(c(AUC, Cmax, Tmax), names_to = "metric", values_to = "value") %>%
+  group_by(isotope, diet, visit, metric) %>%
+  summarise(n = n(), median = median(value), q25 = quantile(value, 0.25), q75 = quantile(value, 0.75), .groups = "drop") %>%
+  arrange(metric, isotope, diet, visit)
+write_csv(curve_metrics_summary, "results/diet_curve_metrics_summary.csv")
+cat("\n=== Curve-derived metrics: median (IQR) per diet x visit ===\n")
+print(as.data.frame(curve_metrics_summary), digits = 3)
+
+# Paired Wilcoxon signed-rank test, baseline vs intervention within each arm and isotope
+# (subjects with both visits; needs >= 3 pairs). The signed differences are on the log scale
+# for AUC and Cmax and in minutes for Tmax, and no multiplicity correction is applied.
+# See "Curve-derived metrics" in docs/diet-summary.md.
+metric_deltas <- curve_metrics %>%
+  pivot_longer(c(AUC, Cmax, Tmax), names_to = "metric", values_to = "value") %>%
+  pivot_wider(names_from = visit, values_from = value) %>%
+  filter(!is.na(baseline), !is.na(intervention)) %>%
+  mutate(delta = if_else(metric == "Tmax", intervention - baseline, log(intervention / baseline)))
+
+metric_wilcoxon <- metric_deltas %>%
+  group_by(metric, isotope, diet) %>%
+  summarise(n_paired = n(), median_delta = median(delta),
+            p = if (n() >= 3) tryCatch(wilcox.test(delta, mu = 0, exact = if (first(metric) == "Tmax") FALSE else NULL)$p.value,
+                                       error = function(e) NA_real_) else NA_real_,
+            .groups = "drop") %>%
+  mutate(label = case_when(is.na(p) ~ sprintf("n=%d", n_paired),
+                           p < 0.001 ~ sprintf("p<0.001 (n=%d)", n_paired),
+                           TRUE ~ sprintf("p=%.3f (n=%d)", p, n_paired)))
+write_csv(metric_wilcoxon, "results/diet_curve_metrics_wilcoxon.csv")
+cat("\n=== Paired Wilcoxon, intervention vs baseline within each arm (curve-derived metrics) ===\n")
+print(as.data.frame(metric_wilcoxon %>% select(-label)), digits = 3)
+
+METRIC_LABELS <- c(AUC = "AUC 0-inf (mg*min/L)", Cmax = "Cmax (mg/L)", Tmax = "Tmax (min)")
+
+for (metric in names(METRIC_LABELS)) {
+  ann <- metric_wilcoxon %>% filter(metric == !!metric)
+  p <- ggplot(curve_metrics, aes(visit, .data[[metric]], fill = visit)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
+    geom_jitter(aes(color = visit), width = 0.08, size = 1.2, alpha = 0.6, show.legend = FALSE) +
+    geom_text(data = ann, aes(x = 1.5, y = Inf, label = label), vjust = 1.4, size = 2.8, inherit.aes = FALSE) +
+    facet_grid(rows = vars(isotope), cols = vars(diet), scales = "free_y",
+               labeller = labeller(isotope = ISOTOPE_LABELS, diet = DIET_LABELS)) +
+    scale_x_discrete(labels = VISIT_LABELS) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
+    scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    scale_color_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+    labs(title = sprintf("%s by diet arm and visit (from fitted curves, paired Wilcoxon)", METRIC_LABELS[[metric]]), x = NULL, y = NULL) +
+    theme_Publication()
+  out_path <- sprintf("results/diet_curve_%s_boxplot.pdf", tolower(metric))
+  ggsave(out_path, p, width = 8, height = 7, dpi = 150)
+  cat("\nSaved", out_path, "\n")
+}
+
 cat("\nSaved results/diet_parameter_summary.csv\n")

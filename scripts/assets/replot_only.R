@@ -76,7 +76,7 @@ results <- read_csv("results/fit_results.csv", show_col_types = FALSE)
 
 simulate_fit <- function(sid, vis, r) {
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
-  Vd <- watson_ecf_volume(cov$bw_kg, cov$height_cm, cov$age_years, cov$sex)
+  Vd <- cov$vd_L
   dose_12C <- cov$dose_12C_mg
   fine <- seq(0, 400, length.out = 400)
 

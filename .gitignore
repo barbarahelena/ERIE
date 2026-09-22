@@ -19,3 +19,6 @@ results/
 
 # Claude
 .claude/
+
+# macOS
+.DS_Store

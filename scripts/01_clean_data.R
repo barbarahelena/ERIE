@@ -94,13 +94,26 @@ sex <- read_csv(file.path(raw_dir, "ERIE_metadata_sex.csv"), show_col_types = FA
   )
 
 # =============================================================================
-# 3b. Age (Watson's male equation needs it; see "Volume of distribution" in docs/pk-model.md)
+# 3b. Age (age at screening, one value per subject)
 # =============================================================================
 age <- read_csv(file.path(raw_dir, "Age_df.csv"), show_col_types = FALSE) %>%
   transmute(
     subject_id = sprintf("ER%02d", as.integer(str_extract(Subject_ID, "\\d+$"))),
     age_years = Age_screening
   )
+
+# =============================================================================
+# 3c. Measured total body water (TBW), the basis of Vd; see "Volume of distribution" in docs/pk-model.md
+# =============================================================================
+ECF_FRACTION_OF_TBW <- 0.4   # Vd = 0.4 * TBW (= TBW / 2.5)
+
+tbw <- read_csv(file.path(raw_dir, "TBW_ERIE.csv"), show_col_types = FALSE) %>%
+  transmute(
+    subject_id = sprintf("ER%02d", as.integer(str_extract(Subject_ID, "\\d+$"))),
+    baseline     = FCT1_TBW_L,
+    intervention = FCT2_TBW_L
+  ) %>%
+  pivot_longer(c(baseline, intervention), names_to = "visit", values_to = "tbw_l")
 
 # =============================================================================
 # 4. Diets: Diet A -> low_fructose (calorie suppl w/ gluc), B -> high_fructose
@@ -144,7 +157,18 @@ covariates <- bodyweights %>%
   left_join(age, by = "subject_id") %>%
   left_join(diet, by = "subject_id") %>%
   left_join(heights, by = "subject_id") %>%
+  left_join(tbw, by = c("subject_id", "visit")) %>%
+  # A visit that took place (has a body weight) but has no TBW measurement takes
+  # the subject's TBW from their other visit.
+  group_by(subject_id) %>%
   mutate(
+    tbw_source = case_when(!is.na(tbw_l) ~ "measured",
+                           !is.na(bw_kg) & any(!is.na(tbw_l)) ~ "other_visit"),
+    tbw_l      = if_else(tbw_source == "other_visit", mean(tbw_l, na.rm = TRUE), tbw_l)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    vd_L           = ECF_FRACTION_OF_TBW * tbw_l,
     dose_12C_mg    = 1000 * bw_kg,
     dose_13C6_umol = administered_dose_umol,
     dose_13C6_mg   = administered_dose_mg
