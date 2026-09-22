@@ -6,9 +6,10 @@
 # ERIE, or any specific study - it only knows about doses, rate constants,
 # and volumes of distribution. Reuse this file as-is in other PK projects;
 # put study-specific config (doses, bounds, which Vd estimate to use) in the
-# analysis script instead. One reusable Vd estimator - nadler_blood_volume()
-# - is provided below; whether it's the right physiological quantity for a
-# given analyte is a per-study call, made in the analysis script.
+# analysis script instead. Two reusable Vd estimators - nadler_blood_volume()
+# and watson_ecf_volume() - are provided below; whether either is the right
+# physiological quantity for a given analyte is a per-study call, made in the
+# analysis script.
 #
 # Two model forms are provided:
 #   - A one-compartment model with first-order absorption and elimination
@@ -312,4 +313,32 @@ nadler_blood_volume <- function(weight_kg, height_cm, sex) {
   k2 <- ifelse(is_male, 0.03219, 0.03308)
   k3 <- ifelse(is_male, 0.6041, 0.1833)
   k1 * height_m^3 + k2 * weight_kg + k3
+}
+
+#' Estimate extracellular fluid volume from total body water (Watson 1980)
+#'
+#' Watson PE, Watson ID, Batt RD. Total body water volumes for adult males
+#' and females estimated from simple anthropometric measurements. Am J Clin
+#' Nutr. 1980;33(1):27-39. Total body water (TBW, liters) is:
+#'   male:   2.447 - 0.09516 * age + 0.1074 * height + 0.3362 * weight
+#'   female: -2.097 + 0.1069 * height + 0.2466 * weight
+#' The extracellular fluid volume is taken as one third of TBW. That fraction
+#' is an approximation, not part of Watson's equations.
+#'
+#' Like nadler_blood_volume(), this is a candidate Vd assumption, not a
+#' universal one; see the calling script's own Vd rationale.
+#'
+#' @param weight_kg Body weight in kg.
+#' @param height_cm Height in cm.
+#' @param age_years Age in years. Only used for males; NA is returned for a
+#'   male with missing age.
+#' @param sex Character vector, "male"/"female" (case-insensitive) per
+#'   observation - which equation to use.
+#' @return Estimated extracellular fluid volume, in liters.
+watson_ecf_volume <- function(weight_kg, height_cm, age_years, sex) {
+  is_male <- tolower(sex) %in% c("male", "m")
+  tbw <- ifelse(is_male,
+                2.447 - 0.09516 * age_years + 0.1074 * height_cm + 0.3362 * weight_kg,
+                -2.097 + 0.1069 * height_cm + 0.2466 * weight_kg)
+  tbw / 3
 }
