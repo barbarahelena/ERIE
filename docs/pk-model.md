@@ -199,7 +199,7 @@ Besides delayed release, 13C6 has two instant-bolus candidates. All three are av
 Vd (L) = 0.4 x TBW (L) = TBW / 2.5
 ```
 
-TBW is the litre value per visit in `data/TBW_ERIE.csv`, and the 0.4 is `ECF_FRACTION_OF_TBW` in `scripts/01_clean_data.R`. `Vd` reaches the fits as the `vd_L` column of `erie_covariates.csv`. ER01 and ER03 have no baseline TBW measurement and use their intervention value (`tbw_source` = `other_visit`). Three TBW entries also look wrong (ER033 FCT1, ER001 FCT2, ER009) but are used as recorded.
+TBW is the litre value per visit read from the raw input file `data/TBW_ERIE.csv` in `scripts/01_clean_data.R`, and the 0.4 is `ECF_FRACTION_OF_TBW` in that script. `Vd` reaches the fits as the `vd_L` column of `erie_covariates.csv`. ER01 and ER03 have no baseline TBW measurement and use their intervention value (`tbw_source` = `other_visit`). Three TBW entries also look wrong (ER033 FCT1, ER001 FCT2, ER009) but are used as recorded.
 
 The ECF is an assumption about fructose's distribution volume. Fructose is small, freely water-soluble and unbound to protein, so it is expected to equilibrate into interstitial fluid as well as the vascular compartment. For glucose, van der Crabben et al. measured a `Vd` of 191-206 mL/kg across three tracers and showed that it equals the extracellular fluid space (ECFV, about 150-200 mL/kg) and exceeds blood or plasma volume. In this cohort `Vd` averages 200 mL/kg (range 145-255) and is about 3.3 times the mean Nadler blood volume, for women and for men alike. The choice of ECF has not been checked against a fructose-specific `Vd`, and the measurement method of the TBW is not recorded in the data.
 
