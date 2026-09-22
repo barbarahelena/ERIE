@@ -95,7 +95,10 @@ vd_data <- fits %>% distinct(subject_id, diet, visit, sex, Vd)
 
 p_vd <- ggplot(vd_data, aes(diet, Vd, fill = visit)) +
   geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5, position = position_dodge(width = 0.6)) +
-  geom_jitter(aes(shape = sex), position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.6),
+  # group = visit, not the default (fill x shape): without it, adding shape=sex here
+  # splits the dodge into 4 slots (visit x sex) instead of matching the boxplot's 2
+  # (visit), and points land outside their own box.
+  geom_jitter(aes(shape = sex, group = visit), position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.6),
               size = 1.8, alpha = 0.8, color = "black") +
   scale_x_discrete(labels = DIET_LABELS) +
   scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
