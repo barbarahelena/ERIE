@@ -88,18 +88,18 @@ fits <- fits %>%
 reliable_fits <- fits %>% filter(reliable)
 
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
-# Vd is 0.4 x the measured TBW, not a fit result, so it isn't gated on `reliable`
-# and is shown once per subject (mean over visits) as a covariate-balance check.
+# Vd is 0.4 x the measured TBW, not a fit result, so it isn't gated on `reliable`.
+# Split by visit (dodged, matching the R2 plot below) as a covariate-balance check.
 
-vd_data <- fits %>% group_by(subject_id, diet, sex) %>%
-  summarise(Vd = mean(Vd), .groups = "drop")
+vd_data <- fits %>% distinct(subject_id, diet, visit, sex, Vd)
 
-p_vd <- ggplot(vd_data, aes(diet, Vd, fill = diet)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
-  geom_jitter(aes(shape = sex), width = 0.08, size = 1.8, alpha = 0.8, color = "black") +
+p_vd <- ggplot(vd_data, aes(diet, Vd, fill = visit)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5, position = position_dodge(width = 0.6)) +
+  geom_jitter(aes(shape = sex), position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.6),
+              size = 1.8, alpha = 0.8, color = "black") +
   scale_x_discrete(labels = DIET_LABELS) +
-  scale_fill_manual(values = DIET_COLORS, guide = "none") +
-  labs(title = "Extracellular fluid volume (Vd = 0.4 x measured TBW) by diet arm",
+  scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
+  labs(title = "Extracellular fluid volume",
        x = NULL, y = "Vd (L)", shape = "Sex") +
   theme_Publication()
 
