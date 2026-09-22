@@ -86,6 +86,8 @@ fits <- fits %>%
     reliable = !kel_at_bound & r2_12C >= R2_INCLUDE_MIN
   )
 
+reliable_fits <- fits %>% filter(reliable)
+
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
 # Vd is 0.4 x the measured TBW, not a fit result, so it isn't gated on `reliable`
 # and is shown once per subject (mean over visits) as a covariate-balance check. See "Outputs" in docs/diet-summary.md.
@@ -362,7 +364,7 @@ if (nrow(two_wave_params) >= 4) {
 # k_release = NA to simulate_delayed_release()) blanks a whole group's mean. See
 # "Median and mean concentration-time curves" in docs/diet-summary.md.
 curve_matrix <- function(diet_val, vis, isotope) {
-  sub <- fits %>% filter(diet == diet_val, visit == vis, reliable)
+  sub <- reliable_fits %>% filter(diet == diet_val, visit == vis)
   if (nrow(sub) == 0) return(NULL)
 
   conc_list <- sub %>% pmap(function(...) {
@@ -416,13 +418,14 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
   boot <- replicate(BOOT_N, hd_median_rows(conc_mat[, sample.int(n, replace = TRUE), drop = FALSE]))
   ci   <- apply(boot, 1, quantile, probs = c(0.025, 0.975))
   sem  <- apply(conc_mat, 1, sd) / sqrt(n)
+  mean_conc <- rowMeans(conc_mat)
 
   tibble(
     time_min    = FINE_T_DIET,
     median_conc = hd_median_rows(conc_mat),
     median_lo   = ci[1, ],
     median_hi   = ci[2, ],
-    mean_conc   = rowMeans(conc_mat),
+    mean_conc   = mean_conc,
     mean_lo     = mean_conc - sem,
     mean_hi     = mean_conc + sem,
     n           = n
@@ -478,7 +481,7 @@ curve_metrics <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = 
   pmap_dfr(function(diet, visit, isotope) {
     m <- curve_matrix(diet, visit, isotope)
     if (is.null(m)) return(NULL)
-    f <- fits[match(paste(colnames(m), visit), paste(fits$subject_id, fits$visit)), ]
+    f <- reliable_fits[match(paste(colnames(m), visit), paste(reliable_fits$subject_id, reliable_fits$visit)), ]
     # AUC to infinity: every mechanism delivers F * dose to the blood and kel clears it.
     dose_iso <- if (isotope == "12C") f$dose_12C_mg else dose_13C6_mg
     F_iso    <- if (isotope == "12C") f$F_12C else f$F_13C6
@@ -495,11 +498,12 @@ write_csv(curve_metrics, "results/diet_curve_metrics.csv")
 # random intercept, one model per metric x isotope. AUC and Cmax stay on the log
 # scale like the fitted parameters; Tmax stays on its raw minutes scale, as in the
 # paired test below. See "Linear mixed models" in docs/diet-summary.md.
-metric_covariates <- fits %>% distinct(subject_id, visit, sex, age_years, bw_kg)
+metric_covariates <- reliable_fits %>%
+  distinct(subject_id, visit, sex, age_years, bw_kg)
 
 fit_metric_lmm <- function(metric_name, isotope_val, log_scale) {
   d <- curve_metrics %>% filter(isotope == isotope_val) %>%
-    left_join(metric_covariates, by = c("subject_id", "visit")) %>%
+    inner_join(metric_covariates, by = c("subject_id", "visit")) %>%
     transmute(subject_id, diet, visit, sex, age_years, bw_kg, value = .data[[metric_name]])
   run_lmm(d, sprintf("%s_%s", metric_name, isotope_val), log_scale = log_scale)
 }
