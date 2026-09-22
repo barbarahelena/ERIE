@@ -416,13 +416,14 @@ average_curve_isotope <- function(diet_val, vis, isotope) {
   boot <- replicate(BOOT_N, hd_median_rows(conc_mat[, sample.int(n, replace = TRUE), drop = FALSE]))
   ci   <- apply(boot, 1, quantile, probs = c(0.025, 0.975))
   sem  <- apply(conc_mat, 1, sd) / sqrt(n)
+  mean_conc <- rowMeans(conc_mat)
 
   tibble(
     time_min    = FINE_T_DIET,
     median_conc = hd_median_rows(conc_mat),
     median_lo   = ci[1, ],
     median_hi   = ci[2, ],
-    mean_conc   = rowMeans(conc_mat),
+    mean_conc   = mean_conc,
     mean_lo     = mean_conc - sem,
     mean_hi     = mean_conc + sem,
     n           = n

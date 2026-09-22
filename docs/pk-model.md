@@ -4,7 +4,7 @@ This documents the pharmacokinetic (PK) model fit by `scripts/02_fit_erie_model.
 
 ## Summary
 
-**What is modelled.** For every subject x visit, two plasma curves come from the same blood draws: 12C-fructose (1 g/kg, drunk as a liquid) and 13C6-fructose (a fixed 120 mg tracer in an enteric capsule). Both are described by one-compartment first-order oral kinetics with the same absorption rate `ka` and elimination rate `kel`, a separate bioavailable fraction `F` per curve, and a volume of distribution `Vd` computed from the subject's weight, height, age and sex.
+**What is modelled.** For every subject x visit, two plasma curves come from the same blood draws: 12C-fructose (1 g/kg, drunk as a liquid) and 13C6-fructose (a fixed 120 mg tracer in an enteric capsule). Both are described by one-compartment first-order oral kinetics with the same absorption rate `ka` and elimination rate `kel`, a separate bioavailable fraction `F` per curve, and a volume of distribution `Vd` taken as 40% of the visit-level measured total body water.
 
 ```
 12C    dose D12 --(ka, F_12C)---------------------> blood --kel--> cleared
