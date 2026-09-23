@@ -78,7 +78,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/r-lava-1.9.3-r45hacb3a79_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/r-lifecycle-1.0.5-r45hc72bb7e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/r-listenv-1.0.0-r45hc72bb7e_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/noarch/r-lmertest-3.2_1-r45hc72bb7e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/r-matrixmodels-0.5_4-r45hc72bb7e_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/r-memoise-2.0.1-r45hc72bb7e_4.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/r-modelr-0.1.11-r45hc72bb7e_3.conda
@@ -1195,20 +1194,6 @@ packages:
   run_exports: {}
   size: 141666
   timestamp: 1782127769813
-- conda: https://conda.anaconda.org/conda-forge/noarch/r-lmertest-3.2_1-r45hc72bb7e_0.conda
-  sha256: 4abfe59703e0a9821eae3e6529806033a51945e20546201ab2cd185214de9c8d
-  md5: 48035dc3360343476b62fbc88040abfb
-  depends:
-  - r-base >=4.5,<4.6.0a0
-  - r-ggplot2
-  - r-lme4 >=1.1_10
-  - r-mass
-  - r-numderiv
-  license: GPL (>= 2)
-  license_family: GPL3
-  run_exports: {}
-  size: 529475
-  timestamp: 1772791968387
 - conda: https://conda.anaconda.org/conda-forge/noarch/r-matrixmodels-0.5_4-r45hc72bb7e_1.conda
   sha256: 6794ef8898b444fa220776de99e60b97c50aef50df4db41fca60c0f49913180f
   md5: 911af7f8cd4825aede8294e74d471d38

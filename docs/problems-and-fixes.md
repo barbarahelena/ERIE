@@ -1,6 +1,6 @@
 # Problems and fixes
 
-This document records the problems found during model development and how each was resolved. It is the history behind the current design. The current behavior is described in `docs/pk-model.md` and `docs/diet-summary.md`. Entries are grouped by topic and carry the commit that made the change where one is identifiable (`git show <hash>`). Subject-visit cases are written as subject ID plus visit (`baseline` or `intervention`).
+This document records the problems found during model development and how each was resolved. It is the history behind the current design. The current behavior is described in `docs/pk-model.md`. Entries are grouped by topic and carry the commit that made the change where one is identifiable (`git show <hash>`). Subject-visit cases are written as subject ID plus visit (`baseline` or `intervention`).
 
 ## Model structure
 
@@ -114,6 +114,9 @@ The 13C6 dose is 120 mg / 644.78 µmol. The raw constants files implied about 10
 - **Capsule half-life (4614c09).** `capsule_dissolution_halflife_min` was excluded from the diet summary because `k_release` exists for 9 of 68 fits in the run at that time (14 of 68 now). The column was later removed from `fit_results.csv`.
 - **Paired t-test block from #22 (1affb40).** It read `reliable_shared`, `reliable_12C` and `reliable_13C6` columns that no longer exist and included the capsule half-life. The paired Wilcoxon test and the mixed models cover the same question.
 - **Layout (ea0c8c8, ee42666).** Curves are faceted by diet arm and colored by visit, and parameter and before/after boxplots have one PDF per parameter.
+- **LMMs and the delta plot removed (2026-09-22).** The mixed models above were briefly extended to add AUC, Cmax and Tmax (per isotope) alongside `ka`/`kel`/`F_12C`/`F_13C6`, and age and body weight alongside sex as covariates. The extended LMMs and the delta plot (between-arm Wilcoxon rank-sum on each subject's log fold-change) were then removed, judged unnecessary next to the curve-derived metrics section, which has its own paired Wilcoxon test on AUC/Cmax/Tmax. `library(lmerTest)` and the `r-lme4`/`r-lmertest` pixi dependencies were dropped along with the LMMs. `R2_INCLUDE_MIN` is back to 0.90 (see "Inclusion cutoff" above; it had drifted to 0.75 in between).
+- **Parameter and curve-metric boxplots unified (2026-09-22).** The separate `plot_before_after()` boxplot (its own PDF per parameter, `diet_before_after_boxplot_*.pdf`) is gone; its paired Wilcoxon test (baseline vs intervention within each diet arm) is now annotated directly on the plain parameter boxplot instead, one PDF per parameter as before. This matches the curve-derived metrics boxplots exactly: same annotation style (`geom_text`, not `stat_pvalue_manual`), same plain black jitter (previously colored by visit/diet, which blended into the box fill) on every boxplot in the script. The two-wave characteristics plot keeps its unpaired rank-sum test, since it compares different subjects across diet arms and cannot be paired. All of this script's outputs (previously loose in `results/`) now go in `results/diet_summary/`, alongside `plots_individual/` from `02_fit_erie_model.R`.
+- **Vd plot split by visit (2026-09-22).** It previously showed one Vd per subject (mean over visits) by diet arm only. It now shows both visits, dodged and filled by visit within each diet arm (matching the R2 plot's dodge pattern), jitter still shaped by sex. The title was also shortened from "Extracellular fluid volume (Vd = 0.4 x measured TBW) by diet arm" to "Extracellular fluid volume".
 
 ## Pipeline and data
 
@@ -121,6 +124,10 @@ The 13C6 dose is 120 mg / 644.78 µmol. The raw constants files implied about 10
 - **Raw label typo.** Raw column 34 of `ERIE_fructose_13C.csv` had a label typo (`"FCT -  34"`, missing the "1"), which the position fallback for the visit recovered from. The raw file has since been corrected.
 - **Output names.** The selected-model table is `fit_results.csv` (formerly `fit_results_joint.csv`), and `04_compare_to_former_model.R` reads it (0a3df8a).
 - **Data findings.** A decimal-mark mismatch between raw files (comma in some, period in others) and an undocumented column-to-subject mapping (reverse-engineered from `former_models/`) were found and handled in `01_clean_data.R`; see the 13C6 dose discrepancy above for the same kind of issue.
+
+### R² compared with the former model (`04_compare_to_former_model.R`, removed 2026-09-22)
+
+A one-off script compared each subject x visit's classical R² with the former model's saved results (`former_models/MixedModel/Results/fit_results_joint.csv`), to check that the current joint model was actually an improvement before relying on it. In its last run the median 12C R² was 0.975 against the former model's 0.933 (higher for 57 of 68 subject x visits, lower for 11), and the median 13C6 R² was 0.927 against 0.793 (higher for 58, lower for 10); the correlation between former and current R² across subject x visits was modest (0.36 for 12C, 0.38 for 13C6). R² was a fair yardstick between the two: both objectives are unweighted and normalized by each curve's own total variance. The comparison script and its outputs (`r2_comparison_*.csv/pdf`) were removed once this was established.
 
 ## Documentation corrections
 
