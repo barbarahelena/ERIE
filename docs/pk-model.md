@@ -4,7 +4,7 @@ This documents the pharmacokinetic (PK) model fit by `scripts/02_fit_erie_model.
 
 ## Summary
 
-**What is modelled.** For every subject x visit, two plasma curves come from the same blood draws: 12C-fructose (1 g/kg, drunk as a liquid) and 13C6-fructose (a fixed 120 mg tracer in an enteric capsule). Both are described by one-compartment first-order oral kinetics with the same absorption rate `ka` and elimination rate `kel`, a separate bioavailable fraction `F` per curve, and a volume of distribution `Vd` taken as 40% of the visit-level measured total body water.
+**What is modelled.** For every subject x visit, two plasma curves come from the same blood draws: 12C-fructose (1 g/kg, drunk as a liquid) and 13C6-fructose (a fixed 120 mg tracer in an enteric capsule). Both are described by one-compartment first-order oral kinetics with the same absorption rate `ka` and elimination rate `kel`, a separate bioavailable fraction `F` per curve, and a volume of distribution `Vd` equal to the visit-level measured extracellular water.
 
 ```
 12C    dose D12 --(ka, F_12C)---------------------> blood --kel--> cleared
@@ -51,7 +51,7 @@ second wave       bateman(t; (1 - f_delayed2_13C6) * D13, F_13C6) + bateman(t - 
 
 `ka` and `kel` are shared by every term in both curves.
 
-**Inputs that are not fitted.** `D12` = 1000 mg x body weight in kg. `D13` = 120 mg. `Vd` is the extracellular fluid volume, 0.4 x the measured total body water of that visit in litres (see "Volume of distribution"). 12C concentrations are baseline-corrected (the fasted level is subtracted).
+**Inputs that are not fitted.** `D12` = 1000 mg x body weight in kg. `D13` = 120 mg. `Vd` is the measured extracellular water of that visit in litres (see "Volume of distribution"). 12C concentrations are baseline-corrected (the fasted level is subtracted).
 
 **Parameters.** Which ones exist in a fit depends on the model and mechanism chosen: `single_wave` has `ka`, `kel`, `F_12C`, `F_13C6` and, for 13C6's delayed release, `k_release`. The rest only appear when their mechanism is selected.
 
@@ -193,17 +193,11 @@ Besides delayed release, 13C6 has two instant-bolus candidates. All three are av
 
 ## Volume of distribution (Vd)
 
-`Vd` is the extracellular fluid volume (ECF) of each subject x visit, taken as 40% of the measured total body water (TBW):
+`Vd` is the measured extracellular water (ECW, in litres) of each subject x visit, read from `data/ECW_ERIE.csv` in `scripts/01_clean_data.R`. It reaches the fits as the `vd_L` column of `erie_covariates.csv`. ER01 and ER03 have no baseline ECW measurement and use their intervention value (`ecw_source` = `other_visit`). Two entries look suspicious and are used as recorded: ER033 baseline (28.55 L in an 89.5 kg woman, 319 mL/kg) and ER009 (20.70 L at both visits). ER033 was lost to follow-up and is left out of the diet summary.
 
-```
-Vd (L) = 0.4 x TBW (L) = TBW / 2.5
-```
+The ECF is an assumption about fructose's distribution volume. Fructose is small, freely water-soluble and unbound to protein, so it is expected to equilibrate into interstitial fluid as well as the vascular compartment. For glucose, van der Crabben et al. measured a `Vd` of 191-206 mL/kg across three tracers and showed that it equals the extracellular fluid space (ECFV, about 150-200 mL/kg) and exceeds blood or plasma volume. In this cohort `Vd` averages 228 mL/kg (range 159-319) and is about 3.8 times the mean Nadler blood volume, above the ECFV range quoted for glucose. The choice of ECF has not been checked against a fructose-specific `Vd`, and the measurement method of the ECW is not recorded in the data.
 
-TBW is the litre value per visit read from the raw input file `data/TBW_ERIE.csv` in `scripts/01_clean_data.R`, and the 0.4 is `ECF_FRACTION_OF_TBW` in that script. `Vd` reaches the fits as the `vd_L` column of `erie_covariates.csv`. ER01 and ER03 have no baseline TBW measurement and use their intervention value (`tbw_source` = `other_visit`). Three TBW entries also look wrong (ER033 FCT1, ER001 FCT2, ER009) but are used as recorded.
-
-The ECF is an assumption about fructose's distribution volume. Fructose is small, freely water-soluble and unbound to protein, so it is expected to equilibrate into interstitial fluid as well as the vascular compartment. For glucose, van der Crabben et al. measured a `Vd` of 191-206 mL/kg across three tracers and showed that it equals the extracellular fluid space (ECFV, about 150-200 mL/kg) and exceeds blood or plasma volume. In this cohort `Vd` averages 200 mL/kg (range 145-255) and is about 3.3 times the mean Nadler blood volume, for women and for men alike. The choice of ECF has not been checked against a fructose-specific `Vd`, and the measurement method of the TBW is not recorded in the data.
-
-`F` enters the model only as `F * dose / Vd`, so `F` scales with the assumed `Vd`, while `ka` and `kel` do not depend on it. Within-subject comparisons of `F` (baseline vs. intervention) cancel any systematic bias in `Vd`. The measured TBW differs between the two visits of a subject by a median of 3.7% (SD 2.2 L, 31 subjects with both values), while body weight differs by 1.6 kg (SD), so a paired `F` comparison also carries the visit-to-visit variation of the TBW measurement.
+`F` enters the model only as `F * dose / Vd`, so `F` scales with the assumed `Vd`, while `ka` and `kel` do not depend on it. Within-subject comparisons of `F` (baseline vs. intervention) cancel any systematic bias in `Vd`. The measured ECW differs between the two visits of a subject by a median of 4.2% (SD 1.2 L, 31 subjects with both values), while body weight differs by 1.6 kg (SD), so a paired `F` comparison also carries the visit-to-visit variation of the ECW measurement.
 
 > van der Crabben SN et al. *Relationship between glucose volume of distribution and the extracellular space: a multiple tracer study.* Metabolism. 2011.
 
@@ -250,7 +244,7 @@ In the current run (`results/fit_results.csv`, 68 subject x visit fits) the medi
 - Within-subject, paired comparisons (for example baseline vs. intervention `F`): a systematic `Vd` bias applies equally to both visits of a subject and cancels in a paired comparison.
 
 **Interpretable only with caveats:**
-- `F` on its own. `F` and `Vd` enter the model as the product `F * dose / Vd`, so the data identify only their ratio and cannot distinguish a small `F` with a small `Vd` from a large `F` with a large `Vd`. This is a structural limit of oral-only concentration data. An IV tracer dose in the same subjects or a measured individual `Vd` would resolve it, and this protocol has neither (the measured TBW fixes the total water, and the ECF share of it is assumed). Report `F` conditional on the assumed `Vd` (0.4 x measured TBW). The `F` values have not been compared with a literature fructose or glucose bioavailability at a comparable dose (see "Volume of distribution").
+- `F` on its own. `F` and `Vd` enter the model as the product `F * dose / Vd`, so the data identify only their ratio and cannot distinguish a small `F` with a small `Vd` from a large `F` with a large `Vd`. This is a structural limit of oral-only concentration data. An IV tracer dose in the same subjects or a measured individual `Vd` would resolve it, and this protocol has neither (the measured ECW is used as the distribution volume, which is an assumption about fructose). Report `F` conditional on `Vd` = measured ECW. The `F` values have not been compared with a literature fructose or glucose bioavailability at a comparable dose (see "Volume of distribution").
 - Any boundary-flagged parameter (`kel_at_bound` or `k_release_at_bound` = TRUE). After the retry the data may still leave the parameter at the bound, for example `k_release` at its ceiling because the first post-dose sample already shows near-peak tracer concentration and nothing argues for slower dissolution, which is a sampling-resolution limit. A flag that survives the retry (`retried = TRUE, retry_improved = FALSE`) is more informative than one from a single pass, but it cannot separate "unconstrained by the data" from "the search missed it", so inspect the plot either way.
 - Any fit with `converged = FALSE`. The winning multi-start result did not meet `optim()`'s convergence criterion (it had the lowest objective among the seeds tried), typically because it reached the `maxit` cap.
 - Extrapolated quantities (for example AUC beyond 360 min or the time to full clearance) are projections beyond the last observation.
