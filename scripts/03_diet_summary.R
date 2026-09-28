@@ -71,6 +71,11 @@ dose_13C6_mg <- constants$value[constants$constant == "tracer_13C6_dose_mg"]
 OUT_DIR <- "results/diet_summary"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
+# Subjects who completed both visits (a body weight at each). ER33 and ER34 were
+# lost to follow-up after baseline: they stay in the per-subject CSVs, flagged
+# `completed = FALSE`, and are left out of every plot and statistic.
+completers <- covariates %>% filter(!is.na(bw_kg)) %>% count(subject_id) %>% filter(n == 2) %>% pull(subject_id)
+
 fits <- results %>%
   left_join(covariates %>% select(subject_id, visit, bw_kg, vd_L, sex, age_years, diet), by = c("subject_id", "visit")) %>%
   filter(!is.na(ka))
@@ -79,6 +84,7 @@ fits <- fits %>%
   filter(!is.na(diet)) %>%
   mutate(
     Vd = vd_L,
+    completed = subject_id %in% completers,
     dose_12C_mg = 1000 * bw_kg,
     # Reliable = 12C's fit isn't stuck at the shared kel bound and its R2 clears
     # R2_INCLUDE_MIN, applied to every parameter. `converged` is not required.
@@ -86,12 +92,13 @@ fits <- fits %>%
   )
 
 reliable_fits <- fits %>% filter(reliable)
+summary_fits  <- reliable_fits %>% filter(completed)   # what the plots and statistics use
 
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
-# Vd is 0.4 x the measured TBW, not a fit result, so it isn't gated on `reliable`.
+# Vd is the measured ECW, not a fit result, so it isn't gated on `reliable`.
 # Split by visit (dodged, matching the R2 plot below) as a covariate-balance check.
 
-vd_data <- fits %>% distinct(subject_id, diet, visit, sex, Vd)
+vd_data <- fits %>% filter(completed) %>% distinct(subject_id, diet, visit, sex, Vd)
 
 p_vd <- ggplot(vd_data, aes(diet, Vd, fill = visit)) +
   geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5, position = position_dodge(width = 0.6)) +
@@ -114,8 +121,8 @@ cat("\nSaved", file.path(OUT_DIR, "diet_vd_boxplot.pdf"), "\n")
 R2_RELIABLE_MIN <- 0.70   # matches 02_fit_erie_model.R's own threshold
 
 r2_data <- bind_rows(
-  fits %>% filter(!is.na(r2_12C)) %>% transmute(subject_id, diet, visit, isotope = "12C", r2 = r2_12C),
-  fits %>% filter(!is.na(r2_13C6)) %>% transmute(subject_id, diet, visit, isotope = "13C6", r2 = r2_13C6)
+  fits %>% filter(completed, !is.na(r2_12C)) %>% transmute(subject_id, diet, visit, isotope = "12C", r2 = r2_12C),
+  fits %>% filter(completed, !is.na(r2_13C6)) %>% transmute(subject_id, diet, visit, isotope = "13C6", r2 = r2_13C6)
 )
 
 p_r2 <- ggplot(r2_data, aes(visit, r2, fill = diet)) +
@@ -136,8 +143,7 @@ cat("\nSaved", file.path(OUT_DIR, "diet_r2_boxplot.pdf"), "\n")
 # ---- Parameter summary table (mean/SD/SEM/n per diet x visit) -------------
 
 summarise_param <- function(param) {
-  fits %>%
-    filter(reliable) %>%
+  summary_fits %>%
     group_by(diet, visit) %>%
     summarise(
       mean = mean(.data[[param]], na.rm = TRUE),
@@ -163,10 +169,10 @@ print(as.data.frame(param_table), digits = 3)
 PARAM_LABELS <- c(ka = "ka (1/min)", kel = "kel (1/min)", F_12C = "F[12C]", F_13C6 = "F[13C6]")
 
 box_data <- bind_rows(
-  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "ka", value = ka),
-  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "kel", value = kel),
-  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_12C", value = F_12C),
-  fits %>% filter(reliable) %>% transmute(subject_id, diet, visit, parameter = "F_13C6", value = F_13C6)
+  summary_fits %>% transmute(subject_id, diet, visit, parameter = "ka", value = ka),
+  summary_fits %>% transmute(subject_id, diet, visit, parameter = "kel", value = kel),
+  summary_fits %>% transmute(subject_id, diet, visit, parameter = "F_12C", value = F_12C),
+  summary_fits %>% transmute(subject_id, diet, visit, parameter = "F_13C6", value = F_13C6)
 )
 
 # Paired Wilcoxon signed-rank test, baseline vs intervention within each diet
@@ -221,7 +227,7 @@ for (param_name in c("ka", "kel", "F_12C", "F_13C6")) {
 # ---- Two-wave ("second peak") characteristics by diet arm -----------------
 # Exploratory only.
 
-two_wave_rate <- fits %>% filter(reliable) %>%
+two_wave_rate <- summary_fits %>%
   group_by(diet, visit) %>%
   summarise(n = n(), n_two_wave = sum(model == "two_wave"), .groups = "drop") %>%
   mutate(pct_two_wave = round(100 * n_two_wave / n, 1))
@@ -230,18 +236,19 @@ write_csv(two_wave_rate, file.path(OUT_DIR, "diet_two_wave_rate.csv"))
 cat("\n=== two_wave selection rate by diet x visit (reliable fits only) ===\n")
 print(as.data.frame(two_wave_rate), digits = 3)
 
-two_wave_tbl <- table(fits$diet[fits$reliable], fits$model[fits$reliable] == "two_wave")
+two_wave_tbl <- table(summary_fits$diet, summary_fits$model == "two_wave")
 if (all(dim(two_wave_tbl) == c(2, 2))) {
   fisher_p <- fisher.test(two_wave_tbl)$p.value
   cat("\nFisher's exact test, diet x two_wave selection: p =", round(fisher_p, 3), "\n")
 }
 
-two_wave_params <- fits %>% filter(reliable, model == "two_wave") %>%
-  select(subject_id, diet, visit, t_lag, f_delayed, f_delayed_13C6)
+two_wave_params <- reliable_fits %>% filter(model == "two_wave") %>%
+  select(subject_id, diet, visit, completed, t_lag, f_delayed, f_delayed_13C6)
 write_csv(two_wave_params, file.path(OUT_DIR, "diet_two_wave_params.csv"))
+two_wave_completed <- two_wave_params %>% filter(completed)
 
-if (nrow(two_wave_params) >= 4) {
-  p_two_wave <- two_wave_params %>%
+if (nrow(two_wave_completed) >= 4) {
+  p_two_wave <- two_wave_completed %>%
     pivot_longer(c(t_lag, f_delayed, f_delayed_13C6), names_to = "parameter", values_to = "value") %>%
     filter(!is.na(value)) %>%
     ggplot(aes(diet, value, fill = diet)) +
@@ -253,21 +260,21 @@ if (nrow(two_wave_params) >= 4) {
                                                   f_delayed_13C6 = "f_delayed (13C6)"))) +
     scale_x_discrete(labels = DIET_LABELS) +
     scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
-    labs(title = sprintf("Two-wave characteristics by diet arm (exploratory, n=%d curves)", nrow(two_wave_params)),
+    labs(title = sprintf("Two-wave characteristics by diet arm (exploratory, n=%d curves)", nrow(two_wave_completed)),
          x = NULL, y = NULL) +
     theme_Publication()
   ggsave(file.path(OUT_DIR, "diet_two_wave_boxplot.pdf"), p_two_wave, width = 10, height = 4.5, dpi = 150)
   cat("\nSaved", file.path(OUT_DIR, "diet_two_wave_boxplot.pdf"), ",", file.path(OUT_DIR, "diet_two_wave_rate.csv"), ",", file.path(OUT_DIR, "diet_two_wave_params.csv"), "\n")
 } else {
-  cat("\nToo few two_wave fits to plot a diet comparison (n =", nrow(two_wave_params), ")\n")
+  cat("\nToo few two_wave fits to plot a diet comparison (n =", nrow(two_wave_completed), ")\n")
 }
 
 # ---- Average concentration-time curves per diet x visit x isotope ---------
 # Must mirror simulate_fit() in 02_fit_erie_model.R exactly: the mechanism that
 # won for each subject x visit determines the curve, and a mismatch (e.g. feeding
 # k_release = NA to simulate_delayed_release()) blanks a whole group's mean.
-curve_matrix <- function(diet_val, vis, isotope) {
-  sub <- reliable_fits %>% filter(diet == diet_val, visit == vis)
+curve_matrix <- function(diet_val, vis, isotope, completed_only = TRUE) {
+  sub <- (if (completed_only) summary_fits else reliable_fits) %>% filter(diet == diet_val, visit == vis)
   if (nrow(sub) == 0) return(NULL)
 
   conc_list <- sub %>% pmap(function(...) {
@@ -381,22 +388,23 @@ for (stat in names(CURVE_STATS)) {
 curve_metrics <- expand_grid(diet = c("low_fructose", "high_fructose"), visit = c("baseline", "intervention"),
                              isotope = c("12C", "13C6")) %>%
   pmap_dfr(function(diet, visit, isotope) {
-    m <- curve_matrix(diet, visit, isotope)
+    m <- curve_matrix(diet, visit, isotope, completed_only = FALSE)
     if (is.null(m)) return(NULL)
     f <- reliable_fits[match(paste(colnames(m), visit), paste(reliable_fits$subject_id, reliable_fits$visit)), ]
     # AUC to infinity: every mechanism delivers F * dose to the blood and kel clears it.
     dose_iso <- if (isotope == "12C") f$dose_12C_mg else dose_13C6_mg
     F_iso    <- if (isotope == "12C") f$F_12C else f$F_13C6
     tibble(
-      subject_id = colnames(m), diet = diet, visit = visit, isotope = isotope,
+      subject_id = colnames(m), diet = diet, visit = visit, isotope = isotope, completed = f$completed,
       AUC  = F_iso * dose_iso / (f$Vd * f$kel),
       Cmax = apply(m, 2, max),
       Tmax = FINE_T_DIET[apply(m, 2, which.max)]
     )
   })
 write_csv(curve_metrics, file.path(OUT_DIR, "diet_curve_metrics.csv"))
+metrics_completed <- curve_metrics %>% filter(completed)
 
-curve_metrics_summary <- curve_metrics %>%
+curve_metrics_summary <- metrics_completed %>%
   pivot_longer(c(AUC, Cmax, Tmax), names_to = "metric", values_to = "value") %>%
   group_by(isotope, diet, visit, metric) %>%
   summarise(n = n(), median = median(value), q25 = quantile(value, 0.25), q75 = quantile(value, 0.75), .groups = "drop") %>%
@@ -408,7 +416,7 @@ print(as.data.frame(curve_metrics_summary), digits = 3)
 # Paired Wilcoxon signed-rank test, baseline vs intervention within each arm and isotope
 # (subjects with both visits; needs >= 3 pairs). The signed differences are on the log scale
 # for AUC and Cmax and in minutes for Tmax, and no multiplicity correction is applied.
-metric_deltas <- curve_metrics %>%
+metric_deltas <- metrics_completed %>%
   pivot_longer(c(AUC, Cmax, Tmax), names_to = "metric", values_to = "value") %>%
   pivot_wider(names_from = visit, values_from = value) %>%
   filter(!is.na(baseline), !is.na(intervention)) %>%
@@ -427,11 +435,11 @@ write_csv(metric_wilcoxon, file.path(OUT_DIR, "diet_curve_metrics_wilcoxon.csv")
 cat("\n=== Paired Wilcoxon, intervention vs baseline within each arm (curve-derived metrics) ===\n")
 print(as.data.frame(metric_wilcoxon %>% select(-label)), digits = 3)
 
-METRIC_LABELS <- c(AUC = "AUC 0-inf (mg*min/L)", Cmax = "Cmax (mg/L)", Tmax = "Tmax (min)")
+METRIC_LABELS <- c(AUC = "AUC (mg*min/L)", Cmax = "Cmax (mg/L)", Tmax = "Tmax (min)")
 
 for (metric in names(METRIC_LABELS)) {
   ann <- metric_wilcoxon %>% filter(metric == !!metric)
-  p <- ggplot(curve_metrics, aes(visit, .data[[metric]], fill = visit)) +
+  p <- ggplot(metrics_completed, aes(visit, .data[[metric]], fill = visit)) +
     geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
     geom_jitter(width = 0.08, size = 1.2, alpha = 0.6, color = "black") +
     geom_text(data = ann, aes(x = 1.5, y = Inf, label = label), vjust = 1.4, size = 2.8, inherit.aes = FALSE) +
@@ -440,7 +448,7 @@ for (metric in names(METRIC_LABELS)) {
     scale_x_discrete(labels = VISIT_LABELS) +
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
-    labs(title = sprintf("%s by diet arm and visit (from fitted curves, paired Wilcoxon)", METRIC_LABELS[[metric]]), x = NULL, y = NULL) +
+    labs(title = metric, x = NULL, y = METRIC_LABELS[[metric]]) +
     theme_Publication()
   out_path <- file.path(OUT_DIR, sprintf("diet_curve_%s_boxplot.pdf", tolower(metric)))
   ggsave(out_path, p, width = 8, height = 7, dpi = 150)
