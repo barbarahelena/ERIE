@@ -46,6 +46,21 @@ check("bateman_conc() is continuous across the ka==kel singularity", {
   max(abs(c_exact - c_close)) / max(c_exact) < 1e-3
 })
 
+check("bateman_conc() matches the textbook Bateman form away from ka==kel, for ka < kel and ka > kel", {
+  t <- c(0, 15, 30, 60, 120, 240, 360)
+  textbook <- function(ka, kel) 0.2 * ka * 100 / (ka - kel) * (exp(-kel * t) - exp(-ka * t)) / 10
+  all(abs(bateman_conc(t, 0.05, 0.02, 0.2, 100, 10) - textbook(0.05, 0.02)) < 1e-12,
+      abs(bateman_conc(t, 0.02, 0.05, 0.2, 100, 10) - textbook(0.02, 0.05)) < 1e-12)
+})
+
+check("bateman_conc() is smooth for ka-kel from 1e-12 to 1e-6 (no cancellation noise)", {
+  t <- c(30, 60, 120, 240, 360)
+  ref <- bateman_conc(t, 0.03, 0.03, 0.2, 100, 10)
+  worst <- max(vapply(10^(-12:-6), function(d)
+    max(abs(bateman_conc(t, 0.03 + d, 0.03, 0.2, 100, 10) - ref) / ref), numeric(1)))
+  worst < 1e-3 && all(is.finite(bateman_conc(t, 0.03 + 1e-14, 0.03, 0.2, 100, 10)))
+})
+
 # ---- bateman_tmax() matches the actual numerical peak of bateman_conc() ----
 
 check("bateman_tmax() matches bateman_conc()'s numerical peak", {
