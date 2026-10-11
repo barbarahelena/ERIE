@@ -138,6 +138,12 @@ On the real cohort (`fructose_shared_kel/02_fit_erie_model_fructose_shared_kel.R
 | Independent fits | median +0.30, p = 0.093 | median -0.19, p = 0.11 |
 | Shared `kel` | median +0.50, p = 0.053 | median -0.09, p = 0.81 |
 
+## Statistics in the diet summaries
+
+Each diet summary reports two tests side by side, and the plots show both. The paired Wilcoxon signed-rank test compares baseline with intervention within each arm. The linear mixed model (LMM, `scripts/assets/pk_stats.R`) is `log(value) ~ diet * visit + (1 | subject)` fitted with `nlme::lme` (raw minutes for Tmax). It gives the within-arm change with a 95% CI and p-value, and the diet x visit interaction, which tests whether the change differs between the arms. The interaction is the comparison that answers "did the diets act differently", and it appears as the subtitle of each plot. Tables are in `diet_parameter_tests.csv` and `diet_curve_metrics_tests.csv` in each `diet_summary/` folder. The shared-`kel` summary does not test `kel`, which is assumed.
+
+Interaction p-values in the independent-fit summary (low-fructose arm n = 14, high-fructose arm n = 16): `ka` 0.010, Cmax 0.030, AUC 0.052, Tmax 0.16, `kel` 0.39, `F` 0.92. In the shared-`kel` summary `ka` has p = 0.038 and `F` 0.17. The `ka` interaction inherits the identifiability limits above, because a `kel` change shows up as a `ka` change, and the shared-`kel` one is conditional on a stable `kel`. No multiplicity correction is applied, and these summaries run 12 or more tests each.
+
 ## What can be claimed
 
 - The fast and the slow rate can be reported for each curve and compared between visits (`k_fast`, `k_slow`). These are identified, and the tests above give about 90% power for a 1.5-fold change.
