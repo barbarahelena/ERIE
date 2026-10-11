@@ -61,6 +61,26 @@ check("bateman_conc() is smooth for ka-kel from 1e-12 to 1e-6 (no cancellation n
   worst < 1e-3 && all(is.finite(bateman_conc(t, 0.03 + 1e-14, 0.03, 0.2, 100, 10)))
 })
 
+# ---- mixed_visit_tests(): recovers known within-group and between-group effects ----
+
+check("mixed_visit_tests() recovers a known visit effect per group and the interaction, and returns NA when nothing varies within subject", {
+  source("scripts/assets/pk_stats.R")
+  set.seed(1)
+  n <- 30
+  d <- expand.grid(subject_id = paste0("S", 1:(2 * n)), visit = c("baseline", "intervention"), stringsAsFactors = FALSE)
+  d$diet <- ifelse(as.integer(sub("S", "", d$subject_id)) <= n, "low_fructose", "high_fructose")
+  subj <- rnorm(2 * n, 0, 0.3)[as.integer(sub("S", "", d$subject_id))]
+  true_effect <- ifelse(d$diet == "high_fructose", 0.4, 0) * (d$visit == "intervention")
+  d$value <- exp(2 + subj + true_effect + rnorm(nrow(d), 0, 0.1))
+  r <- mixed_visit_tests(d)
+  ok_effects <- abs(r$lmm_estimate[r$diet == "high_fructose"] - 0.4) < 0.1 && abs(r$lmm_estimate[r$diet == "low_fructose"]) < 0.1
+  ok_interaction <- r$p_interaction[1] < 0.001 && abs(r$interaction_estimate[1] - 0.4) < 0.1
+  ok_ci <- r$lmm_lo[r$diet == "high_fructose"] < 0.4 && r$lmm_hi[r$diet == "high_fructose"] > 0.4
+  const <- d; const$value <- exp(subj[match(const$subject_id, d$subject_id)])   # identical at both visits
+  ok_na <- all(is.na(mixed_visit_tests(const)$p_lmm))
+  ok_effects && ok_interaction && ok_ci && ok_na
+})
+
 # ---- bateman_tmax() matches the actual numerical peak of bateman_conc() ----
 
 check("bateman_tmax() matches bateman_conc()'s numerical peak", {

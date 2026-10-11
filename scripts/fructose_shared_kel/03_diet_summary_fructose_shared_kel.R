@@ -5,9 +5,9 @@
 # (02_fit_erie_model_fructose_shared_kel.R): same statistics and plot choices.
 # Every result is CONDITIONAL on a stable kel between a subject's two visits: the
 # fit forces any kel change into ka and F (docs/ka-kel-identifiability.md), so each
-# plot carries a caption saying so. kel is one value per subject, which makes its
-# paired baseline-vs-intervention test degenerate (n only); its boxplot shows
-# the same value at both visits. Mechanism (single_wave/two_wave) and the two_wave
+# plot carries a caption saying so. kel is assumed, not estimated per visit (one
+# value per subject), so it is left out of every table, test and boxplot here; it
+# still enters the simulated curves and AUC. Mechanism (single_wave/two_wave) and the two_wave
 # f_delayed and t_lag come from the independent fit, where the shared fit holds
 # them fixed.
 
@@ -26,12 +26,14 @@ suppressMessages({
 
 # Get functions
 source("scripts/assets/pk_curves.R")
+source("scripts/assets/pk_stats.R")
 
 # Theme
 theme_Publication <- function(base_size=14, base_family="sans") {
     suppressWarnings(theme_foundation(base_size=base_size, base_family=base_family)
         + theme(plot.title = element_text(face = "bold",
                                           size = rel(1.0), hjust = 0.5),
+                plot.subtitle = element_text(size = rel(0.6), hjust = 0.5),
                 text = element_text(),
                 panel.background = element_rect(colour = NA, fill = NA),
                 plot.background = element_rect(colour = NA, fill = NA),
@@ -168,7 +170,6 @@ summarise_param <- function(param) {
 
 param_table <- bind_rows(
   summarise_param("ka"),
-  summarise_param("kel"),
   summarise_param("F")
 ) %>% arrange(parameter, diet, visit)
 
@@ -177,11 +178,10 @@ cat("=== Parameter summary by diet x visit (reliable fits only) ===\n")
 print(as.data.frame(param_table), digits = 3)
 
 # ---- Boxplot: diet x visit distributions for each parameter ---------------
-PARAM_LABELS <- c(ka = "ka (1/min)", kel = "kel (1/min)", F = "F")
+PARAM_LABELS <- c(ka = "ka (1/min)", F = "F")
 
 box_data <- bind_rows(
   summary_fits %>% transmute(subject_id, diet, visit, parameter = "ka", value = ka),
-  summary_fits %>% transmute(subject_id, diet, visit, parameter = "kel", value = kel),
   summary_fits %>% transmute(subject_id, diet, visit, parameter = "F", value = F)
 )
 
@@ -206,26 +206,39 @@ write_csv(param_wilcoxon, file.path(OUT_DIR, "diet_parameter_wilcoxon.csv"))
 cat("\n=== Paired Wilcoxon, intervention vs baseline within each arm (fitted parameters) ===\n")
 print(as.data.frame(param_wilcoxon %>% select(-label)), digits = 3)
 
+# Random-intercept mixed model per parameter (log scale), shown next to the Wilcoxon:
+# the within-arm change and the diet x visit interaction (difference between arms).
+param_mixed <- box_data %>%
+  group_by(parameter) %>% group_modify(~ mixed_visit_tests(.x, log_scale = TRUE)) %>% ungroup()
+param_tests <- param_wilcoxon %>% select(-label) %>% rename(p_wilcoxon = p) %>%
+  left_join(param_mixed %>% select(-n_subjects), by = c("parameter", "diet")) %>%
+  mutate(label = test_label(n_paired, p_wilcoxon, p_lmm))
+write_csv(param_tests, file.path(OUT_DIR, "diet_parameter_tests.csv"))
+cat("\n=== Wilcoxon and LMM side by side (estimates are log ratios, intervention vs baseline) ===\n")
+print(as.data.frame(param_tests %>% select(-label)), digits = 3)
+
 # One PDF per parameter, faceted by diet arm, annotated with the paired
 # Wilcoxon test above. Jitter is plain black (not colored by visit) so it stays
 # visible against the fill, matching the curve-derived metrics boxplots below.
 plot_param_boxplot <- function(param_name) {
   d <- box_data %>% filter(parameter == param_name)
   if (nrow(d) == 0) return(NULL)
-  ann <- param_wilcoxon %>% filter(parameter == param_name)
+  ann <- param_tests %>% filter(parameter == param_name)
   ggplot(d, aes(visit, value, fill = visit)) +
     geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
     geom_jitter(width = 0.08, size = 1.2, alpha = 0.6, color = "black") +
     geom_text(data = ann, aes(x = 1.5, y = Inf, label = label), vjust = 1.4, size = 2.8, inherit.aes = FALSE) +
     facet_wrap(vars(diet), nrow = 1, labeller = labeller(diet = DIET_LABELS)) +
     scale_x_discrete(labels = VISIT_LABELS) +
-    scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
+    # ka spans a wide range with a long upper tail, so it is drawn on a log scale
+    (if (param_name == "ka") scale_y_log10(expand = expansion(mult = c(0.05, 0.15)))
+     else scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
-    labs(title = PARAM_LABELS[[param_name]], x = NULL, y = NULL) +
+    labs(subtitle = interaction_subtitle(ann), title = PARAM_LABELS[[param_name]], x = NULL, y = NULL) +
     theme_Publication() + labs(caption = CAPTION)
 }
 
-for (param_name in c("ka", "kel", "F")) {
+for (param_name in c("ka", "F")) {
   p <- plot_param_boxplot(param_name)
   if (!is.null(p)) {
     out_path <- file.path(OUT_DIR, sprintf("diet_parameter_boxplot_%s.pdf", param_name))
@@ -424,10 +437,21 @@ write_csv(metric_wilcoxon, file.path(OUT_DIR, "diet_curve_metrics_wilcoxon.csv")
 cat("\n=== Paired Wilcoxon, intervention vs baseline within each arm (curve-derived metrics) ===\n")
 print(as.data.frame(metric_wilcoxon %>% select(-label)), digits = 3)
 
+# Same mixed model for the curve metrics (log scale for AUC and Cmax, minutes for Tmax).
+metric_mixed <- metrics_completed %>%
+  pivot_longer(c(AUC, Cmax, Tmax), names_to = "metric", values_to = "value") %>%
+  group_by(metric) %>% group_modify(~ mixed_visit_tests(.x, log_scale = .y$metric != "Tmax")) %>% ungroup()
+metric_tests <- metric_wilcoxon %>% select(-label) %>% rename(p_wilcoxon = p) %>%
+  left_join(metric_mixed %>% select(-n_subjects), by = c("metric", "diet")) %>%
+  mutate(label = test_label(n_paired, p_wilcoxon, p_lmm))
+write_csv(metric_tests, file.path(OUT_DIR, "diet_curve_metrics_tests.csv"))
+cat("\n=== Wilcoxon and LMM side by side (curve-derived metrics) ===\n")
+print(as.data.frame(metric_tests %>% select(-label)), digits = 3)
+
 METRIC_LABELS <- c(AUC = "AUC (mg*min/L)", Cmax = "Cmax (mg/L)", Tmax = "Tmax (min)")
 
 for (metric in names(METRIC_LABELS)) {
-  ann <- metric_wilcoxon %>% filter(metric == !!metric)
+  ann <- metric_tests %>% filter(metric == !!metric)
   p <- ggplot(metrics_completed, aes(visit, .data[[metric]], fill = visit)) +
     geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5) +
     geom_jitter(width = 0.08, size = 1.2, alpha = 0.6, color = "black") +
@@ -436,7 +460,7 @@ for (metric in names(METRIC_LABELS)) {
     scale_x_discrete(labels = VISIT_LABELS) +
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
-    labs(title = metric, x = NULL, y = METRIC_LABELS[[metric]]) +
+    labs(subtitle = interaction_subtitle(ann), title = metric, x = NULL, y = METRIC_LABELS[[metric]]) +
     theme_Publication() + labs(caption = CAPTION)
   out_path <- file.path(OUT_DIR, sprintf("diet_curve_%s_boxplot.pdf", tolower(metric)))
   ggsave(out_path, p, width = 7, height = 5, dpi = 150)
