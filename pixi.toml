@@ -7,9 +7,18 @@ version = "0.1.0"
 
 [tasks]
 clean-data = "Rscript scripts/01_clean_data.R"
-fit-model = "Rscript scripts/02_fit_erie_model.R"
-diet-summary = "Rscript scripts/03_diet_summary.R"
-pipeline = { depends-on = ["clean-data", "fit-model", "diet-summary"] }
+fit-model = "Rscript scripts/joint_12C_13C6/02_fit_erie_model.R"
+fit-model-fructose-independent = "Rscript scripts/fructose_independent/02_fit_erie_model_fructose_independent.R"
+diet-summary = "Rscript scripts/joint_12C_13C6/03_diet_summary.R"
+diet-summary-fructose-independent = { cmd = "Rscript scripts/fructose_independent/03_diet_summary_fructose_independent.R", depends-on = ["fit-model-fructose-independent"] }
+profile-ka-kel = "Rscript scripts/diagnostics_ka_kel/04_profile_ka_kel.R"
+identified-quantities = "Rscript scripts/diagnostics_ka_kel/05_identified_quantities.R"
+simulate-ka-kel = "Rscript scripts/diagnostics_ka_kel/06_simulate_ka_kel_recovery.R"
+simulate-shared-kel = "Rscript scripts/diagnostics_ka_kel/07_simulate_shared_kel.R"
+fit-model-fructose-shared-kel = { cmd = "Rscript scripts/fructose_shared_kel/02_fit_erie_model_fructose_shared_kel.R", depends-on = ["fit-model-fructose-independent"] }
+diet-summary-fructose-shared-kel = { cmd = "Rscript scripts/fructose_shared_kel/03_diet_summary_fructose_shared_kel.R", depends-on = ["fit-model-fructose-shared-kel"] }
+pipeline-joint = { depends-on = ["clean-data", "fit-model", "diet-summary"] }
+pipeline = { depends-on = ["pipeline-joint", "diet-summary-fructose-independent", "diet-summary-fructose-shared-kel"] }
 test-engine = "Rscript scripts/assets/tests.R"
 
 [dependencies]

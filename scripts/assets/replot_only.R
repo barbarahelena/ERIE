@@ -1,5 +1,5 @@
-# Quick standalone re-plot from an already-written results/fit_results.csv -
-# re-simulates and re-draws results/plots_individual/*.pdf using the
+# Quick standalone re-plot from an already-written results/joint_12C_13C6/fit_results.csv -
+# re-simulates and re-draws results/joint_12C_13C6/plots_individual/*.pdf using the
 # CURRENT plot_subject_fit()/simulate_fit() logic in 02_fit_erie_model.R,
 # without re-running the (slow) fitting itself. Useful for verifying a
 # plotting-only fix (e.g. the t_lag1_13C6 rendering bug) against results
@@ -72,7 +72,7 @@ data_corrected <- data %>%
   mutate(conc_mgL = if_else(isotope == "12C", conc_mgL - baseline_mgL, conc_mgL)) %>%
   select(-baseline_mgL)
 
-results <- read_csv("results/fit_results.csv", show_col_types = FALSE)
+results <- read_csv("results/joint_12C_13C6/fit_results.csv", show_col_types = FALSE)
 
 simulate_fit <- function(sid, vis, r) {
   cov <- covariates %>% filter(subject_id == sid, visit == vis)
@@ -140,14 +140,14 @@ plot_subject_fit <- function(sid) {
     theme_Publication()
 }
 
-dir.create("results/plots_individual", showWarnings = FALSE, recursive = TRUE)
+dir.create("results/joint_12C_13C6/plots_individual", showWarnings = FALSE, recursive = TRUE)
 n <- 0
 for (sid in unique(results$subject_id)) {
   p <- plot_subject_fit(sid)
   if (!is.null(p)) {
-    ggsave(file.path("results/plots_individual", sprintf("%s_joint.pdf", sid)),
+    ggsave(file.path("results/joint_12C_13C6/plots_individual", sprintf("%s_joint.pdf", sid)),
            p, width = 8, height = 5, dpi = 120)
     n <- n + 1
   }
 }
-cat("Re-plotted", n, "subjects to results/plots_individual/*.pdf\n")
+cat("Re-plotted", n, "subjects to results/joint_12C_13C6/plots_individual/*.pdf\n")

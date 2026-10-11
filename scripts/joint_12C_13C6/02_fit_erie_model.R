@@ -147,7 +147,7 @@ subject_visits <- data_fit %>% distinct(subject_id, visit) %>% arrange(subject_i
 
 # Fast-testing mode: restrict to a handful of subjects for quick local
 # iteration without waiting on the full cohort run. Set via
-# ERIE_TEST_SUBJECTS="ER01,ER02,ER03" Rscript scripts/02_fit_erie_model.R -
+# ERIE_TEST_SUBJECTS="ER01,ER02,ER03" Rscript scripts/joint_12C_13C6/02_fit_erie_model.R -
 # unset (the default) runs every subject.
 test_subjects <- Sys.getenv("ERIE_TEST_SUBJECTS", unset = "")
 if (nzchar(test_subjects)) {
@@ -755,10 +755,10 @@ results <- results %>% select(subject_id, visit, model, ka, kel, F_12C, F_13C6, 
 cat("\n=== Model selection ===\n")
 print(table(results$model, useNA = "ifany"))
 
-dir.create("results", showWarnings = FALSE)
-write_csv(single_wave_results, "results/fit_results_single_wave.csv")
-write_csv(two_wave_results, "results/fit_results_two_wave.csv")
-write_csv(results, "results/fit_results.csv")
+dir.create("results/joint_12C_13C6", showWarnings = FALSE, recursive = TRUE)
+write_csv(single_wave_results, "results/joint_12C_13C6/fit_results_single_wave.csv")
+write_csv(two_wave_results, "results/joint_12C_13C6/fit_results_two_wave.csv")
+write_csv(results, "results/joint_12C_13C6/fit_results.csv")
 
 # Plots: one figure per subject (both isotopes x both visits) using each subject
 # x visit's selected model, against the observed points (including t=0, unlike
@@ -832,13 +832,13 @@ plot_subject_fit <- function(sid) {
     theme_Publication()
 }
 
-dir.create("results/plots_individual", showWarnings = FALSE, recursive = TRUE)
+dir.create("results/joint_12C_13C6/plots_individual", showWarnings = FALSE, recursive = TRUE)
 for (sid in unique(subject_visits$subject_id)) {
   p <- plot_subject_fit(sid)
-  if (!is.null(p)) ggsave(file.path("results/plots_individual", sprintf("%s_joint.pdf", sid)),
+  if (!is.null(p)) ggsave(file.path("results/joint_12C_13C6/plots_individual", sprintf("%s_joint.pdf", sid)),
                            p, width = 8, height = 5, dpi = 120)
 }
 
-cat("\nDone. results/fit_results.csv (selected model per subject x visit),",
-    "results/fit_results_single_wave.csv, results/fit_results_two_wave.csv (both candidates),",
-    "results/plots_individual/*.pdf\n")
+cat("\nDone. results/joint_12C_13C6/fit_results.csv (selected model per subject x visit),",
+    "results/joint_12C_13C6/fit_results_single_wave.csv, results/joint_12C_13C6/fit_results_two_wave.csv (both candidates),",
+    "results/joint_12C_13C6/plots_individual/*.pdf\n")
