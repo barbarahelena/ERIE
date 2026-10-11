@@ -267,6 +267,11 @@ retry_seeds_near_bounds <- function(prior_par, bounds, flagged_params,
 #' @param log_scale Passed through to `retry_seeds_near_bounds()`.
 #' @param mc.cores Cores to retry flagged rows across
 #'   (`parallel::mclapply()`); default 1 (sequential, works everywhere).
+#'   This pass's own random retry seeds are reproducible across `mc.cores`
+#'   and task-scheduling order (each row reseeds from `string_seed()` on its
+#'   own row index before drawing them - see the note in `retry_one()` inside
+#'   this function), the same reproducibility `string_seed()`'s own docs
+#'   describe for a calling project's per-task seeding.
 #' @param verbose Print a one-line progress/outcome summary.
 #' @return `results`, with any strictly-improved rows replaced, plus two new
 #'   columns: `retried` (TRUE for every row this pass attempted) and
@@ -293,6 +298,13 @@ adaptive_retry <- function(results, bound_cols, bounds, par_cols, refit_fn,
   if (verbose) cat("\nRetrying", length(flagged), "flagged fit(s) (boundary and/or poor fit) with a denser search...\n")
 
   retry_one <- function(i) {
+    # Seeded here, before retry_seeds_near_bounds()'s own random_seeds() call,
+    # not left to refit_fn(): row index i is a stable, order-independent key
+    # (results is built in a fixed subject/visit order), so this makes the
+    # retry pass's own random seeds reproducible regardless of mc.cores or
+    # task scheduling - the same reasoning as fit_one()'s per-task seeding in
+    # the calling project, extended to cover this driver's own randomness too.
+    set.seed(string_seed(paste("adaptive_retry_row", i)))
     prior_par <- stats::setNames(as.numeric(results[i, par_cols]), par_cols)
     flagged_params <- unname(bound_cols[vapply(names(bound_cols), function(col) isTRUE(results[[col]][i]), logical(1))])
     seeds <- retry_seeds_near_bounds(prior_par, bounds, flagged_params, log_scale = log_scale)

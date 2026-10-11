@@ -178,6 +178,29 @@ check("adaptive_retry() also retries a row with no bound flag via extra_flag_col
     out$a[1] == 1 && out$a[3] == 3       # unflagged rows untouched
 })
 
+check("adaptive_retry()'s own retry seeds are reproducible regardless of the RNG state beforehand", {
+  bounds <- list(a = c(0, 10), b = c(0, 1))
+  results <- tibble(a = c(9.999, 3), b = c(0.5, 0.3),
+                     a_at_bound = c(TRUE, FALSE),
+                     objective_value = c(0.9, 0.3))
+  captured <- NULL
+  refit <- function(i, seeds, maxit) {
+    captured <<- seeds   # only row 1 is flagged, so this always captures that row's seeds
+    tibble(a = 9.999, b = 0.5, a_at_bound = TRUE, objective_value = 0.9)   # never improves - isolates the seeds themselves
+  }
+  set.seed(42); invisible(runif(100))   # perturb the ambient RNG state differently before each call
+  adaptive_retry(results, bound_cols = c(a_at_bound = "a"), bounds = bounds, par_cols = c("a", "b"),
+                 refit_fn = refit, mc.cores = 1, verbose = FALSE)
+  seeds_run1 <- captured
+
+  set.seed(7); invisible(runif(37))
+  adaptive_retry(results, bound_cols = c(a_at_bound = "a"), bounds = bounds, par_cols = c("a", "b"),
+                 refit_fn = refit, mc.cores = 1, verbose = FALSE)
+  seeds_run2 <- captured
+
+  identical(seeds_run1, seeds_run2)
+})
+
 check("adaptive_retry()'s retried/retry_improved columns distinguish never-flagged, improved, and retried-but-not-improved", {
   bounds <- list(a = c(0, 10), b = c(0, 1))
   results <- tibble(a = c(1, 9.999, 3, 4), b = c(0.1, 0.5, 0.3, 0.5),
@@ -204,6 +227,19 @@ check("watson_ecf_volume() matches hand-computed values, and only males use age"
   abs(male - 14.9562) < 1e-4 && abs(female - 10.1125) < 1e-4 &&
     watson_ecf_volume(60, 165, NA, "female") == female &&
     is.na(watson_ecf_volume(80, 180, NA, "male"))
+})
+
+# ---- has_near_peak_neighbor(): peak-at-t=30 is excluded, not just neighbor-at-t=30 ----
+
+check("has_near_peak_neighbor() excludes a peak AT t=30, mirroring the neighbor-at-30 exclusion", {
+  # Peak at t=30, near-tall neighbor at t=60: an early single peak (at or
+  # before t=30) declining slowly can produce exactly this shape, so it must
+  # NOT count as second-wave evidence (this is the case the fix targets).
+  peak_at_30 <- !has_near_peak_neighbor(c(0, 30, 60, 90), c(1, 100, 90, 40))
+  # Same shape shifted one sample later (peak at t=60, tall neighbor at
+  # t=90) is NOT excluded - a real signature the detector should still catch.
+  peak_at_60 <- has_near_peak_neighbor(c(0, 30, 60, 90), c(1, 50, 100, 90))
+  peak_at_30 && peak_at_60
 })
 
 cat("\nAll", n_pass, "tests passed.\n")
