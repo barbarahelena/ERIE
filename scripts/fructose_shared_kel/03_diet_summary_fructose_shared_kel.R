@@ -5,8 +5,8 @@
 # (02_fit_erie_model_fructose_shared_kel.R): same statistics and plot choices.
 # Every result is CONDITIONAL on a stable kel between a subject's two visits: the
 # fit forces any kel change into ka and F (docs/ka-kel-identifiability.md), so each
-# plot carries a caption saying so. kel is assumed, not estimated per visit (one
-# value per subject), so it is left out of every table, test and boxplot here; it
+# plot carries a caption saying so. kel is an assumption with one value
+# per subject and no estimate per visit, so it is left out of every table, test and boxplot here; it
 # still enters the simulated curves and AUC. Mechanism (single_wave/two_wave) and the two_wave
 # f_delayed and t_lag come from the independent fit, where the shared fit holds
 # them fixed.
