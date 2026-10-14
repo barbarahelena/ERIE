@@ -1,270 +1,223 @@
 # Fructose PK model specification
 
-This documents the pharmacokinetic (PK) model fit by `scripts/joint_12C_13C6/02_fit_erie_model.R`, the biological and statistical reasoning behind it, and - most importantly - what its output can and cannot be used to claim. The reasoning draws on the documents in `former_models/*/*.docx` and was re-derived and re-validated for this pipeline (see "Origin of the model"). The history of problems and fixes is in `docs/problems-and-fixes.md`.
+This documents the pharmacokinetic (PK) model of plasma fructose fitted by `scripts/02_fit_shared_kel.R`, the reasoning behind it, and what its output can and cannot be used to claim. The model structure of each curve comes from an earlier independent fit, `scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R`, whose output in `results/01_independent_fit/` is kept frozen and read as input. The manuscript text is in `docs/methods.md`, and the history of problems and fixes is in `docs/problems-and-fixes.md`.
 
 ## Summary
 
-**What is modelled.** For every subject x visit, two plasma curves come from the same blood draws: 12C-fructose (1 g/kg, drunk as a liquid) and 13C6-fructose (a fixed 120 mg tracer in an enteric capsule). Both are described by one-compartment first-order oral kinetics with the same absorption rate `ka` and elimination rate `kel`, a separate bioavailable fraction `F` per curve, and a volume of distribution `Vd` equal to the visit-level measured extracellular water.
+**What is modelled.** For every subject x visit there is one plasma curve of unlabeled (12C) fructose after a drink of 1 g/kg body weight. It is described by one-compartment first-order oral kinetics with an absorption rate `ka`, an elimination rate `kel`, a bioavailable fraction `F` and a volume of distribution `Vd` equal to the measured extracellular water of that visit. The two visits of a subject are fitted together with one `kel` per subject and a separate `ka` and `F` per visit.
 
 ```
-12C    dose D12 --(ka, F_12C)---------------------> blood --kel--> cleared
-13C6   dose D13 --(k_release)--> gut --(ka, F_13C6)--> blood --kel--> cleared
+dose D --(ka, F)--> blood --kel--> cleared
 
 concentration = amount in blood / Vd
 ```
 
-**Formulas.** `t` is in minutes, doses in mg, `Vd` in litres and concentrations in mg/L. Two building blocks are used:
+**Formulas.** `t` is in minutes, doses in mg, `Vd` in litres and concentrations in mg/L.
 
 ```
-bateman(t; D, F)   one dose D absorbed with ka, cleared with kel (closed form)
-  = F * ka * D / (Vd * (ka - kel)) * (exp(-kel * t) - exp(-ka * t))      0 for t <= 0
+bateman(t; D) = F * ka * D / (Vd * (ka - kel)) * (exp(-kel * t) - exp(-ka * t))      0 for t <= 0
   (when ka = kel: F * ka * D * t * exp(-ka * t) / Vd)
-
-capsule(t; D, F)   the dose first dissolves (rate k_release), then behaves as above
-  dR/dt = -k_release * R              R(0) = D
-  dG/dt =  k_release * R - ka * G     G(0) = 0
-  dA/dt =  F * ka * G - kel * A       A(0) = 0
-  = A(t) / Vd                          (solved numerically)
 ```
 
-The plain model (`single_wave`) is:
+The plain model (`single_wave`) is `C(t) = bateman(t; D)`. Many curves have a post-peak dip that one absorption phase cannot produce, so `two_wave` splits the dose into an early part and a part that starts `t_lag` minutes later, with `f_delayed` the late fraction:
 
 ```
-C_12C(t)  = bateman(t; D12, F_12C)
-C_13C6(t) = capsule(t; D13, F_13C6)
+C(t) = bateman(t; (1 - f_delayed) * D) + bateman(t - t_lag; f_delayed * D)
 ```
 
-Many curves have a post-peak dip that one absorption phase cannot produce, so `two_wave` splits the 12C dose into an early part and a part that starts `t_lag` minutes later. `f_delayed` is the late fraction:
+Both waves share `ka`, `kel` and `F`.
 
-```
-C_12C(t) = bateman(t; (1 - f_delayed) * D12, F_12C) + bateman(t - t_lag; f_delayed * D12, F_12C)
-```
+**Two stages.**
 
-13C6 then uses whichever of three mechanisms fits it best (chosen by AIC on its own residuals, independently of 12C's model):
+1. The independent fit (archived script) fits each subject x visit on its own with `ka`, `kel` and `F` free, chooses `single_wave` or `two_wave`, and estimates `f_delayed` and `t_lag`. Of the 68 curves, 22 use `single_wave` and 46 `two_wave`.
+2. The shared-`kel` fit (`02_fit_shared_kel.R`) refits the 33 subjects who completed both visits. Each visit keeps the structure from stage 1, with `f_delayed` and `t_lag` held fixed, and the fit estimates one `kel` per subject plus `ka` and `F` for each visit (five parameters per subject).
 
-```
-delayed release   capsule(t; D13, F_13C6)
-                  under two_wave, split like 12C: (1 - f_delayed_13C6) at t and f_delayed_13C6 at t - t_lag
-onset lag         bateman(t - t_lag1_13C6; D13, F_13C6)
-second wave       bateman(t; (1 - f_delayed2_13C6) * D13, F_13C6) + bateman(t - t_lag2_13C6; f_delayed2_13C6 * D13, F_13C6)
-```
+**Inputs that are not fitted.** `D` = 1000 mg x body weight in kg. `Vd` is the measured extracellular water of that visit in litres (see "Volume of distribution"). Concentrations are baseline-corrected (the fasted level is subtracted).
 
-`ka` and `kel` are shared by every term in both curves.
+**Parameters.**
 
-**Inputs that are not fitted.** `D12` = 1000 mg x body weight in kg. `D13` = 120 mg. `Vd` is the measured extracellular water of that visit in litres (see "Volume of distribution"). 12C concentrations are baseline-corrected (the fasted level is subtracted).
-
-**Parameters.** Which ones exist in a fit depends on the model and mechanism chosen: `single_wave` has `ka`, `kel`, `F_12C`, `F_13C6` and, for 13C6's delayed release, `k_release`. The rest only appear when their mechanism is selected.
-
-| Parameter | Meaning | Applies to | Bounds | Explained in |
+| Parameter | Meaning | Fitted in | Bounds | Explained in |
 |---|---|---|---|---|
-| `ka` | absorption rate constant (1/min) | both curves, shared | [1e-4, 1] | "Design choices", "Fitting bounds" |
-| `kel` | elimination rate constant (1/min) | both curves, shared | [0.005, 0.1] | "Fitting bounds" |
-| `F_12C`, `F_13C6` | fraction of the dose that reaches the blood | one per curve | [1e-4, 1] | "Design choices", "Fit quality and what to trust" |
-| `k_release` | capsule dissolution rate constant (1/min) | 13C6 delayed release only | [0.001, 1] | "Design choices" |
-| `f_delayed` | fraction of the 12C dose in the late wave | 12C, `two_wave` | [0.001, 0.999] | "The post-peak dip and the lagged-dose model" |
-| `t_lag` | start of the late wave (min) | 12C `two_wave`; shared with 13C6's delayed release under `two_wave` | [5, 150]; 30 to 150 if 12C at t=30 is above 5 mg/L | "The post-peak dip and the lagged-dose model" |
-| `f_delayed_13C6` | fraction of the 13C6 dose in the late wave | 13C6 delayed release, under `two_wave` | [0.001, 0.999] | "13C6's own wave choice" |
-| `t_lag1_13C6` | onset delay of the 13C6 curve (min) | 13C6 onset lag | [0, 90] | "13C6's onset-lag and second-wave candidates" |
-| `f_delayed2_13C6`, `t_lag2_13C6` | fraction and start (min) of 13C6's own second wave | 13C6 second wave | [0.05, 0.95] and [30, 150] | "13C6's onset-lag and second-wave candidates" |
+| `kel` | elimination rate constant (1/min) | shared fit, one per subject | [0.0099, 0.099] (t½ 7-70 min) | "Fitting bounds" |
+| `ka` | absorption rate constant (1/min) | shared fit, one per visit | [1e-4, 1] | "Fitting bounds", "Why one kel per subject" |
+| `F` | fraction of the dose that reaches the blood | shared fit, one per visit | [1e-4, 1] | "Fit quality and what to trust" |
+| `f_delayed` | fraction of the dose in the late wave | independent fit, `two_wave` only | [0.001, 0.999] | "The post-peak dip and the lagged-dose model" |
+| `t_lag` | start of the late wave (min) | independent fit, `two_wave` only | [5, 150]; 30 to 150 if t=30 is above 5 mg/L | "The post-peak dip and the lagged-dose model" |
 
-**How a fit works.** Each subject x visit is fitted with `single_wave`, and with `two_wave` when the raw 12C data show evidence of a second wave (or `single_wave` fits very poorly); the choice between them is made by AIC on 12C's residuals, except that unambiguous dip evidence forces `two_wave`. Every fit uses multi-start bounded optimization (`optim`, L-BFGS-B). The objective of the main fits is, per curve, the squared error divided by that curve's total variance (unweighted), plus two soft penalties: predicted Tmax at least 30 min, and predicted Cmax within +/-10% of the observed Cmax. 13C6's onset-lag and second-wave candidates are refitted afterwards with `ka` and `kel` fixed, using plain squared error. Fits flagged for a bound, a low R² or non-convergence get a denser retry. See "Fitting procedure" and "Choosing between single_wave and two_wave".
-
-**What to trust.** `ka` and `kel` are reasonably well identified. `F` is only interpretable within a subject (for example baseline versus intervention) because `F` and `Vd` enter the model only as `F * D / Vd`; report it as conditional on the assumed `Vd`. Check `r2_12C`, `r2_13C6`, `converged` and the bound flags before using an individual fit. See "Fit quality and what to trust".
+**What to trust.** Every `ka` and `F` result is conditional on `kel` being the same at both visits: the fit attributes any change in elimination to `ka` or `F`. `F` is only interpretable within a subject because `F` and `Vd` enter the model only as `F * D / Vd`. Check `r2_b`, `r2_i` and `kel_at_bound` before using an individual fit. See "Why one kel per subject" and "Fit quality and what to trust".
 
 ## Background: what's being measured
 
-Each fructose challenge test (FCT) gives two simultaneous plasma curves from the same blood draws, at t = 30, 60, 90, 120, 150, 180, 240, 360 min after a combined dose:
-
-- **12C-fructose**: 1 g/kg body weight of unlabeled fructose, drunk in water (an individualized, large dose).
-- **13C6-fructose**: a fixed tracer dose in an enteric capsule (120 mg / 644.78 µmol, confirmed administered dose; see `docs/problems-and-fixes.md` for the dose discrepancy this project resolved).
-
-Every subject has this pair of curves at both FCT1 (coded `baseline`) and FCT2 (coded `intervention`, post 4-week diet intervention) - `visit` in the cleaned data and in every downstream script is `baseline`/`intervention`, and `FCT1`/`FCT2` appear only as raw-file labels.
+Each fructose challenge test (FCT) samples plasma at t = 0, 30, 60, 90, 120, 150, 180, 240 and 360 min after a drink of 1 g/kg body weight of unlabeled fructose. Every subject has a test at FCT1 (coded `baseline`) and FCT2 (coded `intervention`, after the 4-week diet intervention). `visit` in the cleaned data and in every downstream script is `baseline`/`intervention`, and `FCT1`/`FCT2` appear only as raw-file labels. A capsule with 120 mg of 13C6-fructose tracer was taken with the drink; its curve is fitted afterwards with the rates of the 12C fit held fixed (see "The 13C6 tracer with fixed rates").
 
 ### What the model is fit to
 
-`02_fit_erie_model.R` prepares the cleaned data as follows before any fit:
-- Concentrations are converted from µmol/L to mg/L with each isotope's own molecular weight (`MW_12C`, `MW_13C6` in `data/processed/erie_constants.csv`), so they match the mass units of the doses.
-- 12C is baseline-corrected: the subject's own fasted (t=0) 12C level is subtracted from every 12C observation, since the dose is added on top of endogenous fructose. 13C6 needs no correction (the tracer is absent at baseline).
-- t=0 is excluded from fitting - it carries no information (12C is 0 by construction after correction, and 13C6 hasn't been dosed yet; both models predict exactly 0 there for any parameters) - but is kept for plotting so the observed point still shows.
-- Rows without a body weight (the intervention visits of the two study dropouts) are dropped.
+Before any fit:
+- Concentrations are converted from µmol/L to mg/L with the molecular weight `MW_12C` in `data/processed/erie_constants.csv`, so they match the mass unit of the dose.
+- The subject's own fasted (t=0) level is subtracted from every observation of that test, since the dose is added on top of endogenous fructose.
+- t=0 is excluded from fitting, because the corrected value is 0 by construction and the model predicts exactly 0 there for any parameters.
+- Rows without a body weight (the intervention visits of the two study dropouts, ER33 and ER34) are dropped, and the shared fit uses only the 33 subjects with both visits.
 
-## Design choices: shared and separate parameters
+## Why one kel per subject
 
-The equations are in the Summary. This section explains why the two curves share `ka` and `kel` while each has its own `F`, and why the capsule has a dissolution step.
+With one curve per visit, `ka` and `kel` are interchangeable. Swapping them and multiplying `F` by `ka / kel` gives exactly the same curve:
 
-### Why `ka` and `kel` are shared
+```
+C(t; ka, kel, F) = C(t; kel, ka, F * ka / kel)
+```
 
-Once fructose is in the gut, the same transporters absorb it and the same machinery clears it from blood, whatever the route (liquid or capsule), so `ka` and `kel` should be the same for both curves of a subject and visit. Fitting the two curves independently gave poor cross-curve agreement in `kel` for many subjects, which led to testing the shared-parameter model directly. In the former joint model, sharing raised the 13C6 median R² from about 0.70 (independent fits) to about 0.78 (joint fit) and left far fewer subjects below R² 0.3 (see "Origin of the model").
+The dose passes through two first-order steps in series, and the output of two first-order delays does not depend on their order. Identical predictions give identical residuals, R² and penalties, and `F` is free, so nothing in the objective prefers one of the two solutions. A single curve identifies a fast rate `max(ka, kel)` and a slow rate `min(ka, kel)` without saying which one is absorption. When absorption is the slower step (flip-flop kinetics), the tail of the curve carries `ka`. Slow gastric emptying of a large liquid load makes this plausible for fructose. The `two_wave` model reuses `ka`, `kel` and `F` in both waves and has the same symmetry.
 
-### Why each curve has its own `F`
+The data add to this. Each curve has about eight samples after the dose, the first at 30 min, and when `ka` and `kel` are close the curve becomes `t * exp(-k * t)`, a single-rate curve. In the independent fit 44 of the 68 curves end with `ka` and `kel` equal within 0.1%, so for most curves only one rate is visible.
 
-The two doses differ roughly 1000-fold (1 g/kg liquid, 120 mg capsule). First-pass clearance of fructose in the small intestine depends on dose: at low doses the small intestine metabolizes most of the fructose before it reaches the liver, and this capacity saturates above roughly 1 g/kg (Jang et al. 2018), which is the 12C dose used here. The two curves are therefore expected to differ in intestinal saturation and in `F` even with shared `ka` and `kel`, so `F_12C` and `F_13C6` are fitted separately and their difference is interpreted.
+The study hypothesis is that the diet changes absorption and leaves elimination unchanged. The shared fit uses this assumption: with one `kel` for both visits, an exact swap would need the same `ka` at both visits, so the change in `ka` between the visits becomes identifiable. Which of the two rates is absorption stays open: in the simulations below, the shared fit still puts `ka` and `kel` in the wrong order in 25% to 70% of fits. The price is that any real change in `kel` is attributed to `ka` or `F`. A `ka` result from this fit has to be reported as conditional on a stable `kel`, and it cannot be used to argue that `kel` was stable.
 
-### Why the capsule has a dissolution step
+The AIC compares the shared fit with the two independent fits of the same subject (pooled raw residuals of both visits, one parameter fewer for the shared fit). The shared `kel` has the lower AIC in 26 of 33 subjects and is worse by more than 2 in 5. A model with one parameter fewer that absorbs a real `kel` change without a large loss of fit would give the same picture, so this agreement is weak evidence for a stable `kel`.
 
-Instant availability of the full capsule dose at t=0 assumes infinitely fast dissolution. The dissolution compartment (`k_release`) lets the data determine how fast the capsule releases its contents. It is the delayed-release mechanism of 13C6; in the current results 14 of 68 fits use it, and the others use the onset-lag or second-wave mechanisms described below.
+The simulations in `scripts/06_simulate_ka_kel_recovery.R` and `scripts/07_simulate_shared_kel.R` repeat the study design with known `ka` and `kel`: the 33 completers' sampling times, `Vd` and doses at both visits, `single_wave` truth, 20% between-subject variation in `ka`, `kel` and Cmax, and additive noise of 4.3 mg/L (the median residual SD of the real fits). The intervention visit has a 1.5-fold change in `ka` or in `kel`, or no change. Every curve is refitted with each approach: each visit alone (06, 15 random starts, 100 replicates per scenario) and one `kel` per subject (07, 25 random starts, 40 replicates). `scripts/08_plot_simulations.R` draws the comparison in `results/03_diagnostics_ka_kel/simulation/`: `simulation_figure_ka.pdf` shows the scenarios the shared-`kel` model is built for (no change and a `ka` change), and `simulation_figure.pdf` adds the `kel` change that violates its assumption.
+
+- **Each visit fitted alone.** A 1.5-fold `ka` change is detected in 76% to 82% of replicates, and its size is underestimated (median error in the log change -0.06 to -0.20, against a true change of 0.41). A 1.5-fold `kel` change is reported as a `ka` change in 72% to 85% of replicates. The fitted `ka` and `kel` are in the wrong order in 36% to 70% of fits. The sorted rates do work: a change in the fast rate gives `max(ka, kel)` a power of 0.88 to 0.92, and a change in the slow rate gives `min(ka, kel)` a power of 0.99 to 1.00.
+- **One `kel` per subject.** A 1.5-fold `ka` change is detected in every replicate, with a median error in the log change of -0.03 to +0.05. With no change the `ka` test rejects in 7.5% and 15% of replicates (95% CI up to 29% with 40 replicates), against 5% to 7% for the independent fits.
+- **When the assumption is violated.** With a 1.5-fold `kel` change, the shared fit reports the whole change as a `ka` change (median error +0.41 and +0.44 in the log change) and the `ka` test rejects in every replicate.
 
 ## The post-peak dip and the lagged-dose model
 
-Many curves show a dip after an initial peak, then a second, often higher, rise before the final decline, most clearly on `ER01` and `ER09`, whose 12C curves are flagged at both visits. How common this is depends on the detector. With the current detectors (see "How the dip is detected" and "Choosing between single_wave and two_wave"), counted over the 68 subject x visit curves of each isotope from `data/processed/` (t=0 excluded and 12C baseline-corrected, as in the fit):
+Many curves show a dip after an initial peak, then a second, often higher, rise before the final decline, most clearly in ER01 and ER09 at both visits. Over the 68 subject x visit curves in `data/processed/` (t=0 excluded, baseline-corrected), the raw-data checks described below fire as follows:
 
-| Check | 12C | 13C6 |
-|---|---|---|
-| `has_peak_dip_rise()` | 43/68 (63%) | 37/68 (54%) |
-| `has_near_peak_neighbor()` | 29/68 (43%) | 21/68 (31%) |
-| either | 53/68 (78%) | 47/68 (69%) |
+| Check | Curves |
+|---|---|
+| `has_peak_dip_rise()` | 43/68 (63%) |
+| `has_near_peak_neighbor()` | 17/68 (25%) |
+| either | 49/68 (72%) |
 
-These checks are permissive gates that decide whether `two_wave` is attempted, and the true number of curves with a second wave is unknown. Where the dip check fires on 12C, the point that triggers it falls at 90 min (11 curves), 120 (10), 150 (17) or 180 (5), spread across the sampling grid.
+These checks are permissive gates that decide whether `two_wave` is attempted, and the true number of curves with a second wave is unknown.
 
-**No parameter choice in the base model (or any variant with a single shared elimination compartment) can produce this shape.** A one-compartment absorption curve is monotonic after its single peak for any `ka`, `kel` and `F`: it is a difference of two exponentials and has no second local maximum. Any number of absorption pathways that all start at t=0 and share one terminal elimination rate converge to the same single-exponential decay tail, so summing them can reshape or delay a single peak and cannot create a local minimum followed by a second rise. A "biphasic gastric emptying" variant (two gastric pools emptying at different rates from t=0 into a shared absorption compartment) confirmed this: thousands of random parameter draws and several hand-engineered attempts never produced a second hump.
+**A one-compartment curve cannot produce this shape.** A difference of two exponentials has one maximum and decreases monotonically after it, for any `ka`, `kel` and `F`. Absorption pathways that all start at t=0 and share one elimination rate converge to the same single-exponential tail, so summing them can reshape or delay a single peak and cannot create a dip followed by a second rise.
 
-**A time-lagged second dose produces the shape** (`simulate_lagged_dose()` in `scripts/assets/pk_curves.R`). A fraction `f_delayed` of a dose contributes nothing until `t_lag`, then behaves like a fresh dose given at that later time, which is mathematically two separately timed doses. The lag creates a discontinuity in the delivery rate and a gap between the two absorption phases, which pathways that all start at t=0 cannot have. Analytically and numerically it yields a local minimum followed by a second, higher peak. In a pilot on `ER01`, `ER03` and `ER09` (`results/model-post-peak-dip-pilot/`), the two dip cases (`ER01`, `ER09`) changed from a single smooth hump to a double-humped fit that follows the dip, and `f_delayed` falls to near 0 for subjects that need no second wave.
+**A time-lagged second dose produces it** (`simulate_lagged_dose()` in `scripts/assets/pk_curves.R`). A fraction `f_delayed` of the dose contributes nothing until `t_lag` and then behaves like a fresh dose given at that time. The lag creates a gap between the two absorption phases, which yields a local minimum followed by a second peak. Physiologically this matches a second phase of gastric emptying: the duodenal feedback that paces emptying of a large caloric and osmotic load pauses and resumes on a timescale of tens of minutes.
 
-`02_fit_erie_model.R` fits two candidates per subject x visit, `fit_subject_visit_single_wave()` (the plain joint delayed-release model) and `fit_subject_visit_two_wave()` (the lagged-dose extension), and selects one (see "Choosing between single_wave and two_wave"). Both candidates' fits are written out in full (`results/fit_results_single_wave.csv`, `results/fit_results_two_wave.csv`) alongside the selected combination (`results/fit_results.csv`).
+`t_lag` is bounded above by 150 min. After 180 min the sampling gaps widen to 60 min (180-240) and 120 min (240-360), and a `t_lag` there would let the optimizer place a second wave where no sample can confirm or refute it.
 
-`t_lag` is bounded above by 150 min. After 180 min the sampling gaps widen to 60 min (180-240) and 120 min (240-360), and a `t_lag` in one of them lets the optimizer place a second wave where no sample can confirm or refute it. `ER12` intervention illustrates this: at `t_lag`=179 min, `r2_13C6` falls from single_wave's 0.95 to 0.75, with a large peak and no supporting data around t=200-220.
-
-The lower bound of `t_lag` depends on the subject's own 12C concentration at t=30: 5 min when it is at or below `EARLY_LAG_OK_MGL` (5 mg/L), 30 min otherwise (`t_lag_lower` in `fit_subject_visit_two_wave()`). The 0-30 min window contains no sample. A low bound for everyone lets the optimizer place an early onset delay there (small `t_lag`, `f_delayed` near 1, so that almost the whole dose is late) whatever the subject's own data say: `ER06` intervention reaches `t_lag`=19.7 min and `f_delayed`=0.999 although its t=30 sample (~80 mg/L) is already near its peak. A floor of 30 min for everyone would exclude a real early delay in a subject whose t=30 concentration is near zero. With the per-subject bound, `ER06` intervention converges to `t_lag`=35.3 min and `f_delayed`=0.320, and `ER01` and `ER09` (t=30 values well above 5 mg/L, `t_lag` 85-114 min) are unaffected.
-
-The bound is a step because every value between 5 and 30 min lies in the same unsampled window. For `ER04` baseline (t=30 = 51.4 mg/L) a floor interpolated between the two values would be 21.6 min, and the fit lands exactly there with a flat-then-rise artifact. Either t=30 is near zero, a delay somewhere in the window is plausible and 5 min is the permissive floor (the data cannot locate the delay within the window), or t=30 is elevated, no point in the window is supported and the floor is 30 min. The `BOUNDS_LAGGED` list in `02_fit_erie_model.R` keeps the permissive floor (5) for the retry driver's seed generation; the subject-specific floor is what the optimizer receives, and seeds are clipped to it.
+The lower bound of `t_lag` depends on the subject's own concentration at t=30: 5 min when it is at or below `EARLY_LAG_OK_MGL` (5 mg/L), 30 min otherwise. The 0-30 min window contains no sample. A low floor for everyone lets the optimizer place an early onset delay there (small `t_lag`, `f_delayed` near 1, almost the whole dose late) even when the t=30 sample is already high. A floor of 30 min for everyone would exclude a real early delay in a subject whose t=30 concentration is near zero. The bound is a step because every value between 5 and 30 min lies in the same unsampled window, so an interpolated floor (21.6 min for ER04 baseline, t=30 = 51.4 mg/L) has no more support than none.
 
 ### How the dip is detected
 
-The raw-data checks in `scripts/assets/pk_diagnostics.R` involve no curve fitting. They use only a curve's own observed points and gate whether the more flexible `two_wave` model is attempted. Fitting first and relying on AIC or R² to notice that there was nothing to explain lets a flexible model explain ordinary sampling noise around a single peak.
+The raw-data checks in `scripts/assets/pk_diagnostics.R` use only a curve's observed points and involve no fitting. Fitting first and relying on AIC or R² lets a flexible model explain ordinary sampling noise around a single peak.
 
-**`peak_dip_rise_info()`** flags a post-peak point that lies at least 15% (`min_rise_frac`) above the straight line joining its two neighbors. A single-exponential elimination phase is convex (it decays ever more slowly), so a real point on it lies at or below the chord between its neighbors, and a point clearly above the chord shows non-monotonic decay whether or not it becomes a new local maximum. This catches a plateau or slowed decline that never rises above what came before, which a test of whether a later point exceeds an earlier local minimum misses. Design details:
-- The first-wave candidate is the first point after which concentration turns down and that is at least half (`min_first_peak_frac`) of the curve's overall peak. A second wave is often taller than the first (`ER01`, `ER09`), so anchoring on the global maximum would miss it, and the half-of-peak floor keeps a small early wobble, while concentration is still climbing, from counting as a first wave.
-- At least one point must separate the first peak from any candidate second peak, because the point right after the peak still describes how sharply the first wave turns over.
-- When several points deviate, the one with the largest deviation is reported as `trigger_time`, with its magnitude as `excess`. `trigger_time` anchors the search seeds (see "Two-stage fit") and `excess` feeds the "definite two_wave" override.
+**`peak_dip_rise_info()`** flags a post-peak point that lies at least 15% (`min_rise_frac`) above the straight line joining its two neighbors. A single-exponential decline is convex, so a point on it lies at or below the chord between its neighbors, and a point clearly above the chord shows non-monotonic decay even when it never exceeds an earlier point. Design details:
+- The first-wave candidate is the first point after which concentration turns down and that is at least half (`min_first_peak_frac`) of the curve's overall peak. A second wave is often taller than the first (ER01, ER09), so anchoring on the global maximum would miss it, and the half-of-peak floor keeps a small early wobble from counting as a first wave.
+- At least one point must separate the first peak from any candidate second peak.
+- When several points deviate, the one with the largest deviation is reported as `trigger_time`, with its size as `excess`. `trigger_time` anchors search seeds and `excess` feeds the "definite two_wave" override.
 
-**`has_near_peak_neighbor()`** covers curves with no visible dip (see "Choosing between single_wave and two_wave").
-
-**`has_onset_lag_evidence()`** addresses a delay before a single wave starts (a standard PK absorption lag time). It fires when the curve's first observed point is below 25% of its own peak, which indicates that absorption had barely started. The 25% threshold lies above both validation cases (`ER25` baseline: 18.4%, `ER06` intervention: 2.2%).
+**`has_near_peak_neighbor()`** flags a curve where the point immediately before or after the peak is at least 85% of the peak's height. This catches two waves that overlap into a flat top or an irregular rise without a visible dip, such as ER02 baseline (`single_wave` R² 0.956, `two_wave` 0.998) and ER30 baseline (0.859 to 0.957). t=30 is excluded as a neighbor, since closeness to the peak at the first sample reflects fast absorption.
 
 ### Choosing between single_wave and two_wave
 
-Selection is by AIC, `n*ln(RSS/n) + 2k`, computed on 12C's own raw residuals (`K_12C_SINGLE_WAVE = 3`: `ka`, `kel`, `F_12C`; `K_12C_TWO_WAVE = 5`: plus `f_delayed`, `t_lag`). 13C6 is fitted after 12C's structure is decided, so basing the selection on 12C alone keeps 13C6's fit quality out of the question whether 12C's curve earns a second wave, and avoids mixing the two concentration scales that a combined AIC would need.
+`two_wave` is attempted when the t=30 sample exists and at least one of three conditions holds:
+- `has_peak_dip_rise()` fires.
+- `has_near_peak_neighbor()` fires.
+- `single_wave` fits very poorly (R² below `R2_ALWAYS_TRY_TWO_WAVE` = 0.50). Two waves close together can add up to one smoothly accelerating rise that neither detector sees. ER21 baseline shows it: the concentration at t=30/60/90 is 32/61/132 mg/L, `single_wave` gives R² 0.33 and `two_wave` 0.993 (`t_lag` 57 min, `f_delayed` 0.80).
 
-`two_wave` is attempted when 12C's t=30 sample exists and at least one of three conditions holds:
-- The raw 12C data pass `has_peak_dip_rise()`.
-- The raw 12C data pass `has_near_peak_neighbor()`: the point immediately before or after the curve's peak is at least 85% of the peak's height. This catches two waves that overlap closely enough to blend into a flat top or an irregular rise without a visible dip: `ER02` baseline (flat top, R² 0.955 to 0.997) and `ER30` baseline (irregular pre-peak rise, R² 0.859 to 0.957). t=30 is excluded as a near neighbor, since closeness to the peak at the first sample reflects fast absorption. `ER06` intervention illustrates the reason: its only near-peak point was t=30, and its `two_wave` fit pinned `t_lag` at the lower bound, where the fits of `ER02` (51.5 min) and `ER30` (75.7 min) settle in the interior.
-- `single_wave` fits 12C very poorly (R² below `R2_ALWAYS_TRY_TWO_WAVE` = 0.50). Two waves close together in time can add up to one smoothly accelerating rise with no down-turn and no plateau, which neither detector sees, and the duodenal-brake feedback that paces gastric emptying of a large caloric and osmotic load such as the 1 g/kg dose pauses and resumes on a timescale of tens of minutes, so such overlap is plausible. `ER21` baseline shows it: 12C at t=30/60/90 is 32/61/132 mg/L (more than doubling with no earlier down-turn), `single_wave` gives R²=0.31, and an unconstrained `two_wave` search found R²=0.99 at `t_lag`=57 min and `f_delayed`=0.80. The threshold lies well below `R2_RELIABLE_MIN` (0.70), so this path opens only when `single_wave` fails to fit.
+Without a t=30 sample, the 0-60 min window has only its two endpoints, and a 5-parameter fit would be under-identified. One curve lacks it. In the current independent fit `two_wave` was attempted on 50 of 68 curves.
 
-A t=30 sample is required because without it the 0-60 min window has only its t=0 and t=60 endpoints to anchor a 5-parameter fit. That fit is under-identified, and AIC accepts any shape that 5 sparse points fit almost exactly (`ER05` baseline: t=30, 90, 150 and 240 are all missing, leaving 5 points for 12C). Checking the raw data before fitting keeps a flexible model from producing a plausible-looking fit for a curve without a second wave.
+Selection is by AIC, `n ln(RSS/n) + 2k`, on the raw residuals (`k` = 3 for `single_wave`, 5 for `two_wave`). AIC is used without the small-sample correction: at n = 8, AICc raises the penalty gap between k = 3 and k = 5 from 4 to 28 and would exclude plateau cases such as ER02 and ER30, whose R² gains are large. Protection against overfitting comes from the raw-data gates and the bounds.
 
-AIC is used without the small-sample correction. AICc (`+2k(k+1)/(n-k-1)`) at n=8 raises the complexity gap between k=3 and k=5 from 4 points to 28 and would exclude all three confirmed plateau cases (`ER02`, `ER06` intervention, `ER30`), which have independently verified R² gains. Protection against overfitting comes from the raw-data gates and the bounds (the data-dependent `t_lag` floor, the per-wave `MIN_TMAX`, the `ka`=`kel` diagonal seeding).
-
-### Definite two_wave override
-
-Where the raw data make a second wave unambiguous, `two_wave` is selected without the AIC comparison. The trigger is `peak_dip_rise_info()`'s `excess` at or above `EXCESS_DEFINITE_TWO_WAVE` (0.90 in `02_fit_erie_model.R`): a marginal AIC edge for `single_wave` (for example from an unlucky local optimum) should not overrule direct evidence in the data. Only a failed `two_wave` fit (no AIC) falls back to `single_wave`.
-
-The threshold lies well above the 15% detection floor and above `ER01`'s 0.40, and is set from the cohort distribution: only `ER08` baseline (1.57) and `ER11` baseline (1.01) exceed it, and both are confirmed by independent evidence (`ER08`: 13C6 peaks at the same timepoint; `ER11`: a sustained dip followed by a peak over several points). Most dip cases, including `ER01` and `ER09`, go through the AIC comparison.
-
-### Two-stage fit: 12C first, then 13C6
-
-`fit_subject_visit_two_wave()` fits the two curves in two stages:
-1. Stage 1 fits `ka`, `kel`, `F_12C`, `f_delayed`, `t_lag` to 12C alone.
-2. Stage 2 fixes those and fits `F_13C6`, `k_release` and 13C6's own `f_delayed_13C6` to 13C6 alone (see "13C6's own wave choice").
-
-The shared lag is estimated from 12C alone. 13C6 has its own onset mechanism (`k_release`, the dissolution of the enteric capsule), and a lag informed by 13C6's residuals attributes 13C6's slow, `k_release`-driven onset to a second wave that then constrains 12C even when 12C's own data give no support for one. `ER32` baseline shows this: its 12C t=30 sample is already near its peak, so no onset delay is plausible, yet a joint fit pins `f_delayed`~1 and `t_lag`~19 min and lowers both curves' R² below the single_wave fit; `ER35` behaves the same way. 12C is also the better source for the lag: its signal is much larger and cleaner, and the 1 g/kg osmotic and caloric liquid load is the physiological trigger of biphasic emptying (the tracer dose is tiny), so a real dip shows up in 12C's data if it exists.
-
-Stage 1 mixes several seed families, because passing the raw-data gate does not place the optimizer's generic seeds near the evidence that justified the attempt: the independent 12C pre-fit (with `f_delayed` near 0, which recovers a plain Bateman fit); a few generic no-lag and dip-like seeds (real dip cases converge near `t_lag`~90); random log-uniform seeds; the `ka`=`kel` diagonal (see "Known limitations and open questions"); and evidence-anchored seeds at `trigger_time` and 20 and 40 min before it, since the trigger point is where the second wave becomes visible, which can lie after its start. The evidence-anchored seeds matter for `ER04` baseline: without them the search converges to `t_lag`=21.6 (an early near-total-delay solution with a marginally better AIC) and misses the t=150 plateau that triggered the attempt.
-
-### 13C6's own wave choice
-
-13C6 has its own free `f_delayed_13C6`, fitted in stage 2 after 12C's `ka`, `kel` and `t_lag` are fixed. 13C6 then decides independently whether it rode only the first wave (`f_delayed_13C6` near 0), only the second (near 1) or both, and shares only `t_lag` (the timing of gastric emptying's second wave, a systemic event) with 12C. The capsule contents need not split between the waves in the proportion of the much larger liquid dose, and the capsule may have emptied in one wave. `ER03` baseline shows the need: 12C has two waves (R² = 0.99), while 13C6 has one early peak that decays monotonically with nothing where an inherited second wave would put one, and inheriting 12C's fraction gives `r2_13C6` = 0.075.
-
-`MIN_TMAX` applies to each wave's own peak (`tmax_wave1`, `tmax_wave2`, computed by simulating each wave alone) as well as to the combined curve, because the combined maximum only constrains the taller wave. `ER09` baseline and intervention illustrate this: wave 1 is taller (combined peak at t=38 and t=33) while wave 2 alone peaks at t=151 and t=147, and `ER16` intervention has a wave 2 peaking at t=162. This bounds the peak time from below. The upper end is limited only by `t_lag`'s 150 min cap plus the rise time set by `ka` and `kel` (see "Known limitations and open questions").
-
-### 13C6's onset-lag and second-wave candidates
-
-Besides delayed release, 13C6 has two instant-bolus candidates. All three are available under both `single_wave` and `two_wave` and are compared by AIC on 13C6's own residuals, so 13C6's mechanism is independent of 12C's model. The candidates use `ka` and `kel` fixed at the values from the 12C-anchored fit and leave 12C's reported parameters untouched. The AIC uses K=2 for delayed release under `single_wave` (`F_13C6`, `k_release`) and K=3 under `two_wave` (plus `f_delayed_13C6`), K=2 for the onset lag (`F_13C6`, `t_lag1_13C6`) and K=3 for the second wave (`F_13C6`, `f_delayed2_13C6`, `t_lag2_13C6`).
-
-**Onset lag.** The candidate gives 13C6 a delay `t_lag1_13C6` (bounds 0-90 min) before absorption starts and then simulates the whole dose as an instant bolus (`simulate_two_lag_dose()` with `f_delayed` fixed at 0). The smooth first-order dissolution of delayed release is fastest at t=0 and cannot represent a 13C6 signal that stays near zero for about 30 min and then rises sharply. An instant bolus after a delay has no second undelayed portion, so the near-total-delay solution that `t_lag` and `f_delayed` allow for 12C cannot occur. `k_release` is omitted: with a delay in the model it sat at its upper bound in all three validation cases (`ER06` intervention, `ER25` baseline, `ER25` intervention), because 30-min sampling cannot separate fast dissolution from instant release once the delay explains the flat start. The candidate is attempted when `has_onset_lag_evidence()` fires. Validation: `ER25` baseline (R² 0.71 to 0.94, `t_lag1_13C6` = 25 min), `ER06` intervention (0.64 to 0.94, 28 min) and `ER25` intervention (R² 0.75, 27 min). `ER23` intervention has 13C6 at 0.009 mg/L at t=30 and 0.165 at t=60 (5.6% of its peak); with 12C as `two_wave`, delayed release collapses to `f_delayed_13C6`=0.001 and `r2_13C6`=0.35, while the onset-lag candidate gives about 27 min and `r2_13C6`=0.78.
-
-**Second wave.** The candidate (`f_delayed2_13C6`, `t_lag2_13C6`) has the shape of 12C's `two_wave` model (an instant bolus per wave) and is attempted from 13C6's own raw data with the same two detectors. It is mutually exclusive with the onset-lag candidate, since both explain a flat or slow start. 13C6 is noisier than 12C, and the detectors flag 47/68 of its curves (69%; 12C: 53/68, 78%), a high rate for a low-signal curve, so the candidate carries two safeguards. `f_delayed2_13C6` is bounded to [0.05, 0.95] (12C: [0.001, 0.999]), which excludes the near-total-delay solution: `ER21` baseline (the strongest dip excess in the cohort, 3.416) reaches R² 0.508 to 0.741 only with `f_delayed2_13C6`=0.999, driven by a near-zero crash and rebound (0.0117 mg/L at t=150, 0.0354 at t=180) that looks like measurement noise. `t_lag2_13C6` is bounded to [30, 150], since the onset-lag candidate covers delays before the wave starts and this candidate models a later, separate hump. `ER11` baseline (R² 0.787 to 0.846, `f_delayed2_13C6`=0.751) and `ER18` intervention (0.860 to 0.879, `f_delayed2_13C6`=0.095) are accepted fits away from the extremes. A result within 1e-3 of the lower bound of `f_delayed2_13C6` is rejected without an AIC comparison, because it indicates no second wave: `ER18` intervention wins its AIC comparison at `f_delayed2_13C6`=0.05 and `t_lag2_13C6`=150 simultaneously (both bounds) although its dip evidence lies at t=120, and with the rejection it falls back to delayed release (`r2_13C6`=0.66).
-
-### Known limitations and open questions
-
-- **The multistart search can miss a much better optimum when `ka` and `kel` are close to each other.** This is a known hard region for one-compartment models ("flip-flop" kinetics): the `ka/(ka-kel)` term of `bateman_conc` makes the objective surface narrow for gradient-based search, and generic seeds rarely land near it. `ER06` intervention (`single_wave`) showed it: the pipeline reported `ka`=0.016, `kel`=0.051, R²=0.945 (neither at a bound), while multiple `optim()` starts converging to one point found `ka`=0.023, `kel`=0.025, R²=0.986. Explicit `ka`=`kel` diagonal seeds (`v` from 0.008 to 0.07, `F` fixed low) are added in `fit_curve_independent()`, the joint `single_wave` fit and `two_wave` stage 1. Cohort-wide R² values have not been re-checked against a search without these seeds, and reparameterizing to avoid the `ka/(ka-kel)` singularity is untried.
-- **A wave's peak can land late.** Nothing limits the peak time of a wave beyond `t_lag`'s 150 min cap, and a slow `ka` can place the peak well after `t_lag` (`ER16` intervention: wave 2 with `t_lag` = 111 min peaks at t=162 min). t=162 lies inside the densely sampled 0-180 min window, so it has data support, unlike a peak inside the 180-240 or 240-360 min gaps. An upper bound is worth adding if a fitted wave peaks inside one of those gaps.
-- **`MIN_TMAX` is 30 min here.** A sweep of 30, 20 and 10 min on `ER03` baseline under a proportionally weighted objective moved R² only from -0.86 to -0.67, so the floor was not the limiting constraint there. The effect under the unweighted objective and the lagged-dose model actually used here is still untested for the joint 12C/13C6 model. It has since been tested in `02_fit_erie_model_fructose_independent.R` (fructose fit independently of 13C6, same unweighted objective and lagged-dose model): lowering `MIN_TMAX` to 10 min there, full cohort, moved median R² 0.976 to 0.980 and convergence 49/68 to 64/68 with zero regressions (worst delta -2e-11, floating-point noise) - `ER12` intervention (spikes to 180 mg/L at t=30, crashes to 57 by t=60) improved most, 0.840 to 0.984, with its fitted Tmax landing at 17.9 min, clear of the new floor rather than collapsing to a degenerate near-instant spike. Worth the same test on the joint model.
-- **A two-lag model for 12C is untested at cohort scale.** `simulate_two_lag_dose()` can give 12C's first wave its own onset delay `t_lag1` in addition to the second-wave delay. On `ER03` baseline it matched the former model's R² (0.71 vs 0.71) with `f_delayed` near 0, so it mostly used the onset lag. That is one subject, the fit did not converge, and its 12C R² (0.70) was below the simpler unweighted fit (0.85).
+**Definite two_wave override.** When `excess` is at or above `EXCESS_DEFINITE_TWO_WAVE` (0.90), `two_wave` is selected without the AIC comparison, so that an unlucky local optimum cannot overrule unambiguous evidence. Only ER08 baseline (1.57) and ER11 baseline (1.01) reach it. A failed `two_wave` fit falls back to `single_wave`.
 
 ## Volume of distribution (Vd)
 
 `Vd` is the measured extracellular water (ECW, in litres) of each subject x visit, read from `data/ECW_ERIE.csv` in `scripts/01_clean_data.R`. It reaches the fits as the `vd_L` column of `erie_covariates.csv`. ER01 and ER03 have no baseline ECW measurement and use their intervention value (`ecw_source` = `other_visit`). Two entries look suspicious and are used as recorded: ER033 baseline (28.55 L in an 89.5 kg woman, 319 mL/kg) and ER009 (20.70 L at both visits). ER033 was lost to follow-up and is left out of the diet summary.
 
-The ECF is an assumption about fructose's distribution volume. Fructose is small, freely water-soluble and unbound to protein, so it is expected to equilibrate into interstitial fluid as well as the vascular compartment. For glucose, van der Crabben et al. measured a `Vd` of 191-206 mL/kg across three tracers and showed that it equals the extracellular fluid space (ECFV, about 150-200 mL/kg) and exceeds blood or plasma volume. In this cohort `Vd` averages 228 mL/kg (range 159-319) and is about 3.8 times the mean Nadler blood volume, above the ECFV range quoted for glucose. The choice of ECF has not been checked against a fructose-specific `Vd`, and the measurement method of the ECW is not recorded in the data.
+The ECF is an assumption about fructose's distribution volume. Fructose is small, freely water-soluble and unbound to protein, so it is expected to equilibrate into interstitial fluid as well as the vascular compartment. For glucose, van der Crabben et al. measured a `Vd` of 191-206 mL/kg across three tracers and showed that it equals the extracellular fluid space (ECFV, about 150-200 mL/kg) and exceeds blood or plasma volume. In this cohort `Vd` averages 228 mL/kg (range 159-319), above the ECFV range quoted for glucose. The choice of ECF has not been checked against a fructose-specific `Vd`, and the measurement method of the ECW is not recorded in the data.
 
-`F` enters the model only as `F * dose / Vd`, so `F` scales with the assumed `Vd`, while `ka` and `kel` do not depend on it. Within-subject comparisons of `F` (baseline vs. intervention) cancel any systematic bias in `Vd`. The measured ECW differs between the two visits of a subject by a median of 4.2% (SD 1.2 L, 31 subjects with both values), while body weight differs by 1.6 kg (SD), so a paired `F` comparison also carries the visit-to-visit variation of the ECW measurement.
-
-> van der Crabben SN et al. *Relationship between glucose volume of distribution and the extracellular space: a multiple tracer study.* Metabolism. 2011.
+`F` enters the model only as `F * D / Vd`, so `F` scales with the assumed `Vd`, while `ka` and `kel` do not depend on it. Within-subject comparisons of `F` cancel any systematic bias in `Vd`. The measured ECW differs between the two visits of a subject by a median of 4.2% (SD 1.2 L, 31 subjects with both values), so a paired `F` comparison also carries the visit-to-visit variation of the ECW measurement.
 
 ## Fitting bounds (why these numbers)
 
-The Summary lists the bounds of every parameter. The rationale for the four base parameters is here, and the bounds of the wave and lag parameters are explained where those parameters are introduced.
-
 | Parameter | Bounds | Rationale |
 |---|---|---|
-| `kel` | [0.005, 0.1] /min (t½ ≈ 7-140 min) | Anchored to Hannou et al. 2018's review of fructose metabolism. Unconstrained fits give physiologically implausible and inconsistent `kel` across subjects. |
-| `ka` | [1e-4, 1] /min | Wide, because absorption-rate differences (baseline vs. intervention, liquid vs. capsule) are part of the research question. The upper bound of 1/min is a generous ceiling. |
-| `F_12C`, `F_13C6` | [1e-4, 1] | A fraction of a dose. |
-| `k_release` | [0.001, 1] /min (t½ ≈ 0.7-700 min) | Wide enough to cover anything from near-instant to very slow capsule dissolution. |
+| `kel` | [ln 2 / 70, ln 2 / 7] = [0.0099, 0.099] /min (t½ 7-70 min) | Smith et al. 1953 report a fructose half-life of about 20-25 min in normal subjects, longer in hepatic disease. The range is centered on that value on a log scale (geometric midpoint 22 min). |
+| `ka` | [1e-4, 1] /min | Wide, because absorption-rate differences between visits are the research question. |
+| `F` | [1e-4, 1] | A fraction of a dose. |
 
-Two soft penalties are added to the objective. The first pulls the predicted Tmax above 30 min (`MIN_TMAX`, weight `TMAX_LAMBDA`), which rules out a spurious early-spike solution in which the model absorbs and clears almost instantly and produces a sharp early peak between the sparse observed timepoints. The second pulls the predicted Cmax toward the observed Cmax within +/-10%, which discourages systematic over- or undershoot of the peak and leaves the rest of the curve free. Both are evaluated on a dense time grid, because degenerate solutions look fine only at the sparse observed points. Both are smooth (a squared shortfall or excess that is zero at and below the threshold), because `optim()`'s L-BFGS-B relies on finite-difference gradients and a hard penalty boundary makes the surface rough to search.
+The independent fit in `results/01_independent_fit/` was run with the former `kel` bounds of [0.005, 0.1] /min. It supplies the model structure, `f_delayed`, `t_lag` and starting values, and its `kel` estimates are not used directly.
+
+Two soft penalties are added to the objective. The first pulls the predicted Tmax above 10 min (`MIN_TMAX`, weight `TMAX_LAMBDA` = 50), which rules out a degenerate solution that absorbs and clears almost instantly and produces a sharp spike between the fasting sample and the first sample at 30 min. In the independent `two_wave` fit it applies to each wave's own peak as well as to the combined curve, because the combined maximum constrains only the taller wave. The shared fit holds the waves fixed and applies it to the combined curve only. The second pulls the predicted Cmax to within ±10% of the observed maximum (`CMAX_TOL`, weight `CMAX_LAMBDA` = 20), which discourages systematic over- or undershoot of the peak and leaves the rest of the curve free. Both are evaluated on a fine time grid, because degenerate solutions look fine at the sparse observed points, and both are smooth (zero within the limit, squared beyond it), because L-BFGS-B relies on finite-difference gradients.
 
 ## Fitting procedure
 
-PK objective surfaces are multimodal (a fast-absorption, fast-clearance solution can fit nearly as well as a slow/slow one), so every fit uses multi-start optimization; a single run from one starting point is insufficient. Each subject x visit is fitted in two stages:
+PK objective surfaces have several local minima, so every fit uses multi-start bounded optimization (`fit_multistart()` in `scripts/assets/pk_fit.R`, `optim` with L-BFGS-B) and keeps the best solution.
 
-1. An independent pre-fit per curve (closed form for 12C, numerical for 13C6, whose lone curve follows the same ODE) generates informed starting points for stage 2.
-2. The joint fit is seeded from the pre-fit estimates, a systematic grid and random starting points (log-uniform for rate constants). Its objective is the sum over curves of each curve's `sse / ss_tot` (roughly 1 - R² of that curve), plus the two penalties above. Dividing by each curve's total variance keeps the 12C curve, whose concentrations are about 1000 times those of the 13C6 tracer, from dominating the objective and the optimizer from ignoring 13C6.
+**Objective.** Per curve, the residual sum of squares divided by the curve's total sum of squares (roughly 1 - R²), plus the two penalties. The shared fit sums this over the two visits of a subject. Residuals are unweighted: a proportional weighting `1 / pred²` is available in `build_joint_objective()` and is switched off, because it discounts the peak region where early features of the curve live.
 
-Both stages use the same generic multi-start engine (`scripts/assets/pk_fit.R`).
+**Independent fit (stage 1).** Each candidate starts from fixed seeds, `ka` = `kel` diagonal seeds (`v` from 0.008 to 0.07) and 40 (`single_wave`) or 60 (`two_wave`) random log-uniform seeds. `two_wave` adds seeds with `f_delayed` near 0 (which recovers a plain Bateman fit), dip-like seeds, and seeds with `t_lag` at `trigger_time` and 20 and 40 min before it, since the trigger point is where the second wave becomes visible, which can be after it starts. The diagonal seeds matter because the objective near `ka` = `kel` is narrow and generic seeds rarely land there. Fits with `kel` at its bound, R² below 0.70 or no convergence get an adaptive retry with a denser seed set and a higher `maxit`, which replaces the original only when its objective is strictly lower.
 
-**Objective weighting.** `build_joint_objective()` supports an optional proportional weighting `1 / max(pred, floor)^2` (floor: 1% of the curve's Cmax, `weight_floor_frac`). The fits use `proportional_weighting = FALSE`. Residuals of an unweighted fit show heteroscedasticity (the squared-residual scale is about 24 times higher in the top than in the bottom quartile of predicted concentration, for both curves), so unweighted SSE lets each curve's peak region dominate at the expense of the tail, which carries most of the information about `kel`. Weighting discounts exactly the region where an informative early feature lives, because a large predicted value receives a small weight. The 13C6 curve of `ER03` baseline shows the effect: it spikes at t=30 and decays by t=90, and its weighted fit gives R² = -2.18, which loosening `MIN_TMAX` from 30 to 10 barely changes (-0.86 to -0.67), while the unweighted fit with the same `MIN_TMAX`, bounds and an ordinary multistart gives R² = 0.37. The former model's fit of the same subject reaches R² = 0.71, and its objective is unweighted (it normalizes each curve by its own `ssTot` only, in `objective_joint()` of `former_models/MixedModel/Scripts/fructose_joint_model_final.R`), with cohort medians of about 0.9+ for 12C and 0.7-0.9 for 13C6 from the same objective. Weighting remains available for a sensitivity check. The heteroscedasticity persists in the unweighted fit, so `r2_12C` and `r2_13C6` should be checked across the cohort.
+**Shared fit (stage 2).** Each subject starts from 41 seeds: the independent estimates (with the geometric mean of the two `kel` values, and with each visit's slower rate taken as `kel`), four fixed seeds, nine diagonal seeds and 25 random log-uniform seeds. Seeds outside the bounds are moved just inside them. `maxit` is 60 and there is no retry.
 
-**Parameter scaling.** `fit_multistart()` sets `parscale` for L-BFGS-B per start from that start's own magnitude (floored at 1% of the bound range). L-BFGS-B's step sizing assumes roughly unit-scaled parameters, and bounds such as [1e-4, 1] for `ka` and `F_12C` are wide relative to typical fitted values (0.01-0.05), so a bound-width `parscale` is 20-100 times too large and leaves the search stuck near its start. `ER11` baseline shows the effect: the objective (with the `MIN_TMAX` and Cmax penalties) scores a fit at `t_lag`=47.3 as 0.208, a search scaled by each start's own magnitude reaches 0.188 at `t_lag`=120, which matches the dip evidence (`trigger_time`=150) that justified the `two_wave` attempt, and bound-width scaling stays at 0.26-0.28 like a search without scaling. A multistart seed sits in the right neighborhood (pre-fit, evidence anchor or systematic grid), so its magnitude is a better estimate of the local scale than the global bound width.
+**Parameter scaling.** `fit_multistart()` sets L-BFGS-B's `parscale` per start from that start's own magnitude (floored at 1% of the bound range). Bounds such as [1e-4, 1] for `ka` are wide relative to typical fitted values (0.01-0.05), and a scale set from the bound width leaves the search stuck near its start.
 
-**Reproducibility.** Fitting is parallelized across subject x visit pairs with `parallel::mclapply()`, and each pair seeds its random starting points from its own subject and visit ID (`string_seed()` in `pk_fit.R`). A single `set.seed()` before the parallel loop does not give reproducible results under `mclapply()` (identical code and seed drew differently on separate runs), and the `RNGkind("L'Ecuyer-CMRG")` workaround fixes reproducibility only for a fixed task order and core count. Per-ID seeding reproduces each subject's fit for any `N_CORES` and any row order of `subject_visits`.
-
-**Adaptive retry.** Fits flagged after the standard pass get a denser retry: the prior estimate as a seed (so the retry cannot end worse), a systematic grid over the `kel` and `k_release` bound ranges when either bound flag is set, and 80 more random starts at a higher `maxit`. A solution pinned at a bound can hide a better one inside it, and a worse local optimum inside the bounds shows no boundary flag and appears as a low R² or a non-converged fit, so a subject x visit is retried when `kel_at_bound`, `k_release_at_bound` or `r2_12C_low` is TRUE or `converged` is FALSE. `r2_13C6_low` alone does not trigger a retry, in either model: a poor 13C6 fit usually reflects a structural mismatch, and 13C6 has its own `f_delayed_13C6`, so a persistently poor `r2_13C6` means the extra freedom found no good shape, and a denser search of the same structure is unlikely to help. The retry replaces the original only when its `objective_value` is strictly lower (comparable only within the same subject x visit), so retrying cannot make a result worse.
-
-A flagged fit can reflect a weak curve or a search failure, and the per-model results tables (`fit_results_single_wave.csv`, `fit_results_two_wave.csv`) record which. `retried` is TRUE when the fit was flagged and a denser retry was attempted. `retry_improved` is TRUE when the retry found something strictly better, FALSE when it could not beat the original, and NA when the fit was never flagged. `retried = TRUE, retry_improved = FALSE` points to a low-information curve: for example, slow capsule opening makes the 13C6 shape depend on `k_release` more than on `ka` and `kel`, which leaves a broad, nearly flat region of the objective surface. `retried = TRUE, retry_improved = TRUE` means the original result was under-searched.
+**Reproducibility.** Fits run in parallel with `parallel::mclapply()`. Each independent fit seeds its random starts from its own subject and visit ID (`string_seed()`), and each shared fit from its subject ID, so results do not depend on the number of cores or the row order.
 
 ## Fit quality and what to trust
 
-In the current run (`results/joint_12C_13C6/fit_results.csv`, 68 subject x visit fits) the median R² is 0.975 for the 12C curve (10th percentile 0.916, minimum 0.759) and 0.927 for the 13C6 curve (10th percentile 0.769): 41 of the 13C6 fits are at or above 0.90, 23 between 0.70 and 0.90, 4 below 0.70, and none below 0.30. Per-subject R² is in `results/fit_results.csv`. Check it before trusting an individual subject's parameters, and inspect that subject's plot in `results/plots_individual/` if R² is low.
+In the current shared fit (`results/02_shared_kel/shared_kel_fits.csv`, 33 subjects, 66 curves) the median R² is 0.975 (10th percentile 0.929, minimum 0.749). No curve is below 0.70 and 4 are below 0.90. The shared `kel` has a median of 0.023 /min (t½ 30 min, interquartile range 0.018-0.029). ER14 has its `kel` at the upper bound (0.099), so 32 subjects have a reliable fit at both visits (R² ≥ 0.70 and `kel` away from both bounds), which is the inclusion rule of the diet summary. In 31 of the 66 curves the fitted `ka` is below `kel`. The median `F` is 0.064 (range 0.017-0.32).
 
-`results/joint_12C_13C6/fit_results.csv` also carries `r2_12C_low` and `r2_13C6_low`, TRUE when that curve's R² falls below `R2_RELIABLE_MIN` (0.70, set in `02_fit_erie_model.R`). They are per-curve flags. A low flag on one curve says nothing by itself about the other curve or about the `ka` and `kel` shared by both, but because `ka` and `kel` are fitted jointly, a poor fit on one curve can still bias them, so a low flag is a prompt to inspect the subject's plot. In the current run the flag is set for 0/68 fits on `r2_12C` and 4/68 on `r2_13C6`.
-
-**Interpretable as approximately absolute numbers:**
-- `kel` and `ka` are reasonably well identified given the bounds and the multi-start search.
-- Within-subject, paired comparisons (for example baseline vs. intervention `F`): a systematic `Vd` bias applies equally to both visits of a subject and cancels in a paired comparison.
+**Interpretable within a subject:**
+- The change in `ka` between visits, conditional on a stable `kel`.
+- The change in `F` between visits: a systematic `Vd` bias applies equally to both visits and cancels.
+- Curve metrics derived from the fitted curve (Cmax, Tmax, AUC), which do not depend on how the rates are labeled.
 
 **Interpretable only with caveats:**
-- `F` on its own. `F` and `Vd` enter the model as the product `F * dose / Vd`, so the data identify only their ratio and cannot distinguish a small `F` with a small `Vd` from a large `F` with a large `Vd`. This is a structural limit of oral-only concentration data. An IV tracer dose in the same subjects or a measured individual `Vd` would resolve it, and this protocol has neither (the measured ECW is used as the distribution volume, which is an assumption about fructose). Report `F` conditional on `Vd` = measured ECW. The `F` values have not been compared with a literature fructose or glucose bioavailability at a comparable dose (see "Volume of distribution").
-- Any boundary-flagged parameter (`kel_at_bound` or `k_release_at_bound` = TRUE). After the retry the data may still leave the parameter at the bound, for example `k_release` at its ceiling because the first post-dose sample already shows near-peak tracer concentration and nothing argues for slower dissolution, which is a sampling-resolution limit. A flag that survives the retry (`retried = TRUE, retry_improved = FALSE`) is more informative than one from a single pass, but it cannot separate "unconstrained by the data" from "the search missed it", so inspect the plot either way.
-- Any fit with `converged = FALSE`. The winning multi-start result did not meet `optim()`'s convergence criterion (it had the lowest objective among the seeds tried), typically because it reached the `maxit` cap.
-- Extrapolated quantities (for example AUC beyond 360 min or the time to full clearance) are projections beyond the last observation.
+- `ka` and `kel` as absolute values. Without the shared-`kel` assumption the curve identifies only the fast and the slow rate (see "Why one kel per subject").
+- `F` on its own. The data identify only `F / Vd`, so a small `F` with a small `Vd` cannot be told from a large `F` with a large `Vd`. An IV tracer dose or a measured fructose `Vd` would resolve it, and this protocol has neither. Report `F` conditional on `Vd` = measured ECW.
+- A fit with `kel_at_bound` = TRUE. The data may push `kel` past the allowed half-life range, or the bound may hide a better solution, and the plot is needed to tell which.
+- Extrapolated quantities, such as AUC beyond 360 min, which are projections beyond the last observation.
+
+### Known limitations and open questions
+
+- **The structure comes from fits under the former `kel` bounds.** `single_wave`/`two_wave`, `f_delayed` and `t_lag` were chosen in the independent fit with `kel` in [0.005, 0.1], and the shared fit holds them fixed. Rerunning the independent fit under the current bounds could change the structure of some curves.
+- **The wave structure is fixed in the shared fit.** Only `ka`, `kel` and `F` are re-estimated, so the shared fit cannot move the second wave to suit the shared `kel`.
+- **A wave's peak can land late.** Nothing limits the peak time of a wave beyond `t_lag`'s 150 min cap, and a slow `ka` can place the peak well after `t_lag` (ER16 intervention: `t_lag` 111 min). An upper bound is worth adding if a fitted wave peaks inside the 180-240 or 240-360 min gaps.
+- **A two-lag model is untested at cohort scale.** `simulate_two_lag_dose()` can give the first wave its own onset delay in addition to the second-wave delay.
+
+## The 13C6 tracer with fixed rates
+
+`scripts/09_fit_13C6.R` fits the 13C6 curve of each completer x visit with `ka` (that visit) and `kel` (shared per subject) held at the estimates of `02_fit_shared_kel.R`. The tracer and the unlabeled fructose are the same molecule and are cleared by the same pathways, so they share `kel`, and the tracer is assumed to be absorbed at the 12C rate once it is released. When 12C is `two_wave`, its `t_lag` from the independent fit is available to 13C6. 13C6 is not baseline-corrected (there is no endogenous tracer), t=0 is excluded, and the dose is 120 mg.
+
+Only the parameters specific to the capsule are fitted. Three mechanisms are compared, as in the archived joint model (`scripts/archive/joint_12C_13C6/02_fit_erie_model.R`), whose history is in `docs/problems-and-fixes.md`:
+
+| Mechanism | Fitted parameters | K | Tried when |
+|---|---|---|---|
+| `release` | `F_13C6`, `k_release` [0.001, 1] (capsule dissolution, first order); with a `two_wave` 12C also `f_delayed_13C6` [0.001, 0.999] at 12C's `t_lag` | 2 or 3 | always |
+| `onset_lag` | `F_13C6`, `t_lag1_13C6` [0, 90] (instant bolus that starts late) | 2 | the first sample is below 25% of the peak (`has_onset_lag_evidence()`) |
+| `second_wave` | `F_13C6`, `f_delayed2_13C6` [0.05, 0.95], `t_lag2_13C6` [30, 150] (its own late wave, instant bolus) | 3 | `has_peak_dip_rise()` or `has_near_peak_neighbor()` fires on 13C6's own data |
+
+`second_wave` is rejected without comparison when `f_delayed2_13C6` ends within 1e-3 of its lower bound. The mechanism with the lowest AIC on 13C6's raw residuals is kept. The objective, penalties and multi-start settings are those of the 12C fit (Tmax floor 10 min, Cmax band ±10%, `maxit` 60).
+
+In the current run (66 curves) 13C6 uses `release` in 23 curves, `onset_lag` in 22 and `second_wave` in 21. The median R² is 0.90 (minimum 0.07), and 7 curves are below 0.70. ER22 baseline (R² 0.07) peaks at 30 min and halves by 60 min, faster than the fixed 12C rates of that visit allow. `k_release` sits at its upper bound in 7 curves, which makes the release effectively instant. The median `F_13C6` is 0.069 against 0.064 for `F_12C`, and the ratio `F_13C6 / F_12C` has a median of 1.13 (10th-90th percentile 0.68-1.70).
+
+A 13C6 curve that the fixed rates fit poorly is evidence against the assumption that the tracer follows the 12C kinetics in that visit, or against the 12C rates themselves. The fit cannot tell these apart.
 
 ## Output files
 
-Generated by `02_fit_erie_model.R` into `results/joint_12C_13C6/` (git-ignored):
+Generated by `02_fit_shared_kel.R` into `results/02_shared_kel/` (git-ignored):
 
-- `fit_results.csv`: one row per subject x visit from the model that won the selection (`model` = `single_wave` or `two_wave`), with both candidates' AIC (`aic_single_wave`, `aic_two_wave`). `f_delayed`, `t_lag` and `f_delayed_13C6` are filled only when `two_wave` was selected, and a `two_wave` fit that lost the comparison is set to NA. 13C6's mechanism columns (`t_lag1_13C6`, `f_delayed2_13C6`, `t_lag2_13C6`) can be filled under either 12C model. `k_release` is NA whenever 13C6 uses the onset-lag or second-wave mechanism, because both model the capsule contents as an instant bolus with no dissolution step.
-- `fit_results_single_wave.csv`, `fit_results_two_wave.csv`: each candidate's full fit, including `retried`, `retry_improved`, `objective_value`, `rss_12C` and `n_12C` (what the AIC is computed from) and `t30_present`. `two_wave` rows are NA where it was never attempted (no t=30 sample, or no evidence of a second wave).
-- `plots_individual/ER##_joint.pdf`: one figure per subject with both isotopes (rows) and both visits (columns), the observed points (including t=0), the selected model's fitted curve, each panel annotated with that curve's R², and the 12C panel also with both candidates' AIC. Each curve is drawn until it has cleared to 1% of its own peak (`CLEARANCE_FRAC`), which sets the x-axis limit.
+- `shared_kel_fits.csv`: one row per subject with the structure of each visit (`model_b`, `model_i`), `kel_shared`, `ka_b`, `ka_i`, `F_b`, `F_i`, the R² of each visit (`r2_b`, `r2_i`), `kel_at_bound` (TRUE at either bound), the independent estimates for comparison, the pooled RSS of both fits, `delta_aic` (shared minus independent; negative favors the shared `kel`), `ka_change_log` and `diet`.
+- `shared_kel_wilcoxon.csv`: paired Wilcoxon on the log ratio of intervention to baseline, per diet arm, for `ka` from the shared fit and `ka` and `kel` from the independent fits.
 
-`t30_present` describes the data and is independent of the selected model: without the t=30 sample `ka` is poorly anchored even under `single_wave`, so downstream reliability filtering should consider it alongside R², `converged` and the boundary flags. `scripts/joint_12C_13C6/03_diet_summary.R` reads `fit_results.csv`.
+`03_diet_summary_shared_kel.R` reads these and writes the diet-arm tables and plots to `results/02_shared_kel/diet_summary/`. It leaves `kel` out of every table, test and boxplot, because it is assumed equal at both visits.
+
+Generated by `09_fit_13C6.R` into `results/04_13C6_fixed_rates/`: `fits_13C6.csv` (one row per subject x visit with the fixed `ka`, `kel` and 12C `t_lag`, `F_12C`, the selected `mechanism_13C6`, its parameters, `r2_13C6`, `k_release_at_bound` and the AIC of each candidate) and `plots_individual/`, one figure per subject with both isotopes at both visits.
+
+`10_diet_summary_13C6.R` reads `fits_13C6.csv` and writes the diet-arm tables and plots to `results/04_13C6_fixed_rates/diet_summary/`, with the statistics of 03 (paired Wilcoxon and the random-intercept mixed model). A curve is included when its 13C6 R² is at least 0.70 and the 12C fit that supplies its rates passes the inclusion rule of 03 (57 of 66 curves; 7 fail on 13C6, 2 on 12C). The outcomes are `F_13C6`, the ratio `F_13C6 / F_12C` within a visit (in which `Vd` cancels), and Cmax, Tmax and AUC of the fitted 13C6 curve. `ka` and `kel` are inputs from 12C and are not tested again. The 13C6 mechanism is counted per diet arm and visit, with Fisher's exact test on diet x mechanism. Before plotting, the script recomputes every R² from the curve it draws and stops if one differs from `fits_13C6.csv`.
+
+The independent fit's output in `results/01_independent_fit/` (`fit_results.csv` with the selected structure per curve, and `fit_results_single_wave.csv` and `fit_results_two_wave.csv` with each candidate's full fit) is read by 02 and by the diagnostics 04 to 06.
 
 ## Origin of the model
 
-The model follows the final joint model of `former_models/MixedModel/Scripts/fructose_joint_model_final.R` (Melany's), and the joint version with shared `ka` and `kel` was chosen over fitting either curve alone and over Bas's original 3-compartment Julia model. In her analysis the joint fit raised the 13C6 median R² from about 0.70 (independent fits) to about 0.78 and left far fewer subjects below R² 0.3, which supports the shared-clearance hypothesis. The engine is split into generic files (`scripts/assets/pk_curves.R`, `pk_fit.R`, `pk_diagnostics.R`, meant to be copied into other PK projects) and the ERIE-specific `02_fit_erie_model.R`. The 13C6 dose is the confirmed administered 120 mg / 644.78 µmol (see `docs/problems-and-fixes.md`).
+The model follows the final joint model of `former_models/MixedModel/Scripts/fructose_joint_model_final.R` (Melany's), which fitted the 12C curve and the 13C6 tracer curve together with shared `ka` and `kel`. That joint 12C/13C6 version and the independent fructose fit are archived in `scripts/archive/`, and the current analysis fits the 12C curve first and the 13C6 curve afterwards with the 12C rates held fixed. The engine is split into generic files (`scripts/assets/pk_curves.R`, `pk_fit.R`, `pk_diagnostics.R`, meant to be copied into other PK projects) and the ERIE-specific scripts.
 
 ## References
 
-- Hannou SA, Haslam DE, McKeown NM, Herman MA. *Fructose metabolism and metabolic disease.* J Clin Invest. 2018;128(2):545-555.
-- Jang C, Hui S, Litchfield B, et al. *The small intestine converts dietary fructose into glucose and organic acids.* Cell Metabolism. 2018;27(2):351-361.
+- Smith LH Jr, Ettinger RH, Seligson D, Lightcap PL. *A comparison of the metabolism of fructose and glucose in hepatic disease and diabetes mellitus.* J Clin Invest. 1953;32(4):273-282. doi:10.1172/JCI102736
 - van der Crabben SN, et al. *Relationship between glucose volume of distribution and the extracellular space: a multiple tracer study.* Metabolism. 2011.

@@ -1,16 +1,16 @@
 # =============================================================================
-# 02_fit_erie_model_fructose_shared_kel.R - the real cohort fitted with one kel per subject
+# 02_fit_shared_kel.R - the real cohort fitted with one kel per subject
 #
 # CONDITIONAL analysis: assumes kel does not change between a subject's two
 # visits. Each completer's visits are fitted together with a shared kel and a
 # separate ka and F per visit. Each visit keeps the mechanism that
-# 02_fit_erie_model_fructose_independent.R selected (single_wave, or two_wave
+# scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R selected (single_wave, or two_wave
 # with its f_delayed and t_lag held at the independent estimates), so only
-# ka, kel and F are re-estimated. Same objective, penalties and bounds as the independent fit.
+# ka, kel and F are re-estimated. Same objective and penalties as the independent fit; kel bounded to t½ 7-70 min.
 #
-# Outputs (results/fructose_shared_kel/):
+# Outputs (results/02_shared_kel/):
 #   shared_kel_fits.csv      per subject: shared kel, ka and F by visit, R2, RSS, AIC vs the independent fits
-#   (03_diet_summary_fructose_shared_kel.R summarises these by diet arm)
+#   (03_diet_summary_shared_kel.R summarises these by diet arm)
 #   shared_kel_wilcoxon.csv  paired Wilcoxon on ka (log ratio) and the independent-fit ka, per diet
 # AIC = N ln(RSS/N) + 2k pooled over both visits (raw mg/L residuals). The shared
 # model has one parameter fewer than the independent one; negative delta_aic
@@ -20,11 +20,11 @@ suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr);
 source("scripts/assets/pk_curves.R")
 source("scripts/assets/pk_fit.R")
 
-RES <- "results/fructose_independent"   # the independent fits this script starts from
-OUT_DIR <- "results/fructose_shared_kel"; dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
+RES <- "results/01_independent_fit"   # the independent fits this script starts from
+OUT_DIR <- "results/02_shared_kel"; dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 N_CORES <- as.integer(Sys.getenv("ERIE_N_CORES", unset = 1))
 MIN_TMAX <- 10; CMAX_TOL <- 0.10; CMAX_LAMBDA <- 20; TMAX_LAMBDA <- 50
-BOUNDS <- list(kel = c(0.005, 0.1), ka_b = c(1e-4, 1), ka_i = c(1e-4, 1), F_b = c(1e-4, 1), F_i = c(1e-4, 1))
+BOUNDS <- list(kel = log(2) / c(70, 7), ka_b = c(1e-4, 1), ka_i = c(1e-4, 1), F_b = c(1e-4, 1), F_i = c(1e-4, 1))
 N_RANDOM <- 25
 FINE_T <- seq(0, 400, length.out = 50)
 
@@ -81,7 +81,7 @@ fit_pair <- function(sid) {
   aic_indep  <- N * log((fb$rss + fi$rss) / N) + 2 * k_ind
   tibble(subject_id = sid, model_b = fb$model, model_i = fi$model, kel_shared = p[["kel"]],
          ka_b = p[["ka_b"]], ka_i = p[["ka_i"]], F_b = p[["F_b"]], F_i = p[["F_i"]],
-         r2_b = r2(cb, rss_b), r2_i = r2(ci, rss_i), kel_at_bound = p[["kel"]] > (BOUNDS$kel[2] - 1e-4),
+         r2_b = r2(cb, rss_b), r2_i = r2(ci, rss_i), kel_at_bound = p[["kel"]] < BOUNDS$kel[1] + 1e-4 | p[["kel"]] > BOUNDS$kel[2] - 1e-4,
          ka_b_indep = fb$ka, ka_i_indep = fi$ka, kel_b_indep = fb$kel, kel_i_indep = fi$kel,
          rss_shared = rss_b + rss_i, rss_indep = fb$rss + fi$rss, n_obs = N,
          delta_aic = aic_shared - aic_indep, ka_change_log = log(p[["ka_i"]] / p[["ka_b"]]))

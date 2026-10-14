@@ -14,14 +14,14 @@
 #
 # Paired Wilcoxon signed-rank, intervention vs baseline, within each diet arm
 # (log ratio for rates, Cmax, AUC and t50_rise; minutes for Tmax). No
-# multiplicity correction. Outputs: results/diagnostics_ka_kel/identified_quantities/
+# multiplicity correction. Outputs: results/03_diagnostics_ka_kel/identified_quantities/
 # =============================================================================
 suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(purrr) })
 
-RESULTS_DIR <- "results/fructose_independent"
-OUT_DIR     <- "results/diagnostics_ka_kel/identified_quantities"
+RESULTS_DIR <- "results/01_independent_fit"
+OUT_DIR     <- "results/03_diagnostics_ka_kel/identified_quantities"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
-R2_INCLUDE_MIN <- 0.9   # same gate as 03_diet_summary_fructose_independent.R
+R2_INCLUDE_MIN <- 0.9   # same gate as scripts/archive/fructose_independent/03_diet_summary_fructose_independent.R
 
 covariates <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE)
 constants  <- read_csv("data/processed/erie_constants.csv", show_col_types = FALSE)

@@ -1,5 +1,7 @@
 # Why ka and kel cannot be separated, and what we tested
 
+> **Archived 2026-10-13.** This document describes the fits and simulations run with `kel` bounded to [0.005, 0.1] /min (t½ about 7-140 min). `kel` is now bounded to a half-life of 7 to 70 min, and `results/02_shared_kel/` and `results/03_diagnostics_ka_kel/simulation/` have been regenerated under the new bounds, so the numbers below no longer match those files. The change is recorded in `docs/problems-and-fixes.md`.
+
 This explains why the absorption rate `ka` and the elimination rate `kel` are hard to tell apart in the ERIE fructose curves, which tests were run to show it, and what can still be said about a diet effect on the rates. The model itself is in `docs/pk-model.md`.
 
 ## Summary
@@ -20,7 +22,7 @@ In formulas, the Bateman curve satisfies this identity:
 C(t; ka, kel, F) = C(t; kel, ka, F * ka / kel)
 ```
 
-Swapping the two rates and multiplying `F` by `ka / kel` gives exactly the same concentrations at every time. With `ka = 0.04` and `kel = 0.025` per minute, the swapped solution has `ka = 0.025`, `kel = 0.04` and an `F` 1.6 times larger. Typical fitted `F` values are 0.05 to 0.09 (`results/fructose_independent/diet_summary/diet_parameter_summary.csv`), so the swapped `F` stays far below its upper bound of 1.
+Swapping the two rates and multiplying `F` by `ka / kel` gives exactly the same concentrations at every time. With `ka = 0.04` and `kel = 0.025` per minute, the swapped solution has `ka = 0.025`, `kel = 0.04` and an `F` 1.6 times larger. Typical fitted `F` values are 0.05 to 0.09 (`results/01_independent_fit/diet_summary/diet_parameter_summary.csv`), so the swapped `F` stays far below its upper bound of 1.
 
 A numerical check with illustrative values, `ka = 0.0251`, `kel = 0.0124`, `F = 0.08`, a dose of 80000 mg and `Vd` = 16 L, at the eight sampling times 30 to 360 min, gives concentrations of 172.7, 200.3, 176.4, 139.6, 104.8, 76.2, 38.4 and 9.0 mg/L. The swapped parameters (`ka = 0.0124`, `kel = 0.0251`, `F = 0.162`) give the same eight values, with a largest difference of 6e-14 mg/L, which is floating-point noise. The `two_wave` model, which reuses `ka`, `kel` and `F` in both waves, has the same symmetry and the same difference for a second wave of 50% of the dose at 90 min.
 
@@ -54,16 +56,16 @@ The group means show this. Mean `ka` is 0.058 against a median of 0.026, with SD
 
 ## Tests that were run
 
-All scripts run from the project root. Each model setup has its own folder under `results/`: `fructose_independent/` holds the independent fits (scripts `02_fit_erie_model_fructose_independent.R` and `03_diet_summary_fructose_independent.R`), `fructose_shared_kel/` the shared-`kel` fit, and `diagnostics_ka_kel/` the tests of the independent-fit model (scripts 04 to 07).
+All scripts run from the project root. Scripts 02 to 07 are in `scripts/` and write to `results/02_shared_kel/` (02, 03) and `results/03_diagnostics_ka_kel/` (04 to 07). `results/01_independent_fit/` is the frozen output of the independent fit (`scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R` and `03_diet_summary_fructose_independent.R`, git-ignored), which scripts 02 and 04 to 06 read as input.
 
-| Question | Script | Output |
-|---|---|---|
-| How many fits sit on the `ka = kel` diagonal, and does it affect fit quality? | inline summary of `fit_results.csv` | counts above |
-| Is the diagonal a true minimum or an optimizer artifact? | `scripts/diagnostics_ka_kel/04_profile_ka_kel.R` | `diagnostics_ka_kel/profile_ka_kel.csv` |
-| Does a diet effect show in quantities the curve identifies? | `scripts/diagnostics_ka_kel/05_identified_quantities.R` | `diagnostics_ka_kel/identified_quantities/` |
-| Could this design tell a `ka` change from a `kel` change? | `scripts/diagnostics_ka_kel/06_simulate_ka_kel_recovery.R` | `diagnostics_ka_kel/simulation/simulation_summary.csv` |
-| What does assuming a stable `kel` buy, and what does it cost? | `scripts/diagnostics_ka_kel/07_simulate_shared_kel.R` | `diagnostics_ka_kel/simulation/simulation_shared_kel_summary.csv` |
-| What does the shared-`kel` fit say about the real cohort? (diet summary: `03_diet_summary_fructose_shared_kel.R`) | `scripts/fructose_shared_kel/02_fit_erie_model_fructose_shared_kel.R` | `fructose_shared_kel/` |
+| Question                                                                                                              | Script                                                                  | Output                                                              |
+| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| How many fits sit on the`ka = kel` diagonal, and does it affect fit quality?                                        | inline summary of`fit_results.csv`                                    | counts above                                                        |
+| Is the diagonal a true minimum or an optimizer artifact?                                                              | `scripts/04_profile_ka_kel.R`                      | `03_diagnostics_ka_kel/profile_ka_kel.csv`                           |
+| Does a diet effect show in quantities the curve identifies?                                                           | `scripts/05_identified_quantities.R`               | `03_diagnostics_ka_kel/identified_quantities/`                       |
+| Could this design tell a`ka` change from a `kel` change?                                                          | `scripts/06_simulate_ka_kel_recovery.R`            | `03_diagnostics_ka_kel/simulation/simulation_summary.csv`            |
+| What does assuming a stable`kel` buy, and what does it cost?                                                        | `scripts/07_simulate_shared_kel.R`                 | `03_diagnostics_ka_kel/simulation/simulation_shared_kel_summary.csv` |
+| What does the shared-`kel` fit say about the real cohort? (diet summary: `03_diet_summary_shared_kel.R`) | `scripts/02_fit_shared_kel.R` | `02_shared_kel/`                                            |
 
 `bateman_conc()` in `scripts/assets/pk_curves.R` uses the `expm1` form of the Bateman curve, which has no cancellation as `ka` approaches `kel`. Two tests in `scripts/assets/tests.R` check it against the textbook form and across `ka - kel` from 1e-12 to 1e-6.
 
@@ -75,17 +77,17 @@ For each of the 22 `single_wave` curves, the residual sum of squares is computed
 
 The paired Wilcoxon signed-rank test (intervention against baseline, within each diet arm, no multiplicity correction) is applied to quantities the curve identifies. The fit-derived rows use subjects with a reliable fit at both visits (`R² >= 0.9`, `kel` not at a bound). The observed-data rows use every completer. Rates and ratios are tested on the log scale, Tmax in minutes.
 
-| Quantity | High-fructose | Low-fructose |
-|---|---|---|
-| `ka` (fit) | p = 0.093 (n = 16) | p = 0.038 (n = 14) |
-| `kel` (fit) | p = 0.82 | p = 0.12 |
-| `max(ka, kel)` (fit) | p = 0.29 | p = 0.020 |
-| `min(ka, kel)` (fit) | p = 0.37 | p = 0.069 |
-| Tmax, observed | p = 0.18 (n = 16) | p = 0.71 (n = 17) |
-| Time to 50% of Cmax on the rise, observed | p = 0.33 | p = 0.80 |
-| Cmax, observed | p = 0.003 (up) | p = 0.74 |
-| AUC 0-360, observed | p = 0.13 | p = 0.48 |
-| Terminal rate from t >= 180 min, observed (n = 8 per arm) | p = 0.73 | p = 0.44 |
+| Quantity                                                  | High-fructose      | Low-fructose       |
+| --------------------------------------------------------- | ------------------ | ------------------ |
+| `ka` (fit)                                              | p = 0.093 (n = 16) | p = 0.038 (n = 14) |
+| `kel` (fit)                                             | p = 0.82           | p = 0.12           |
+| `max(ka, kel)` (fit)                                    | p = 0.29           | p = 0.020          |
+| `min(ka, kel)` (fit)                                    | p = 0.37           | p = 0.069          |
+| Tmax, observed                                            | p = 0.18 (n = 16)  | p = 0.71 (n = 17)  |
+| Time to 50% of Cmax on the rise, observed                 | p = 0.33           | p = 0.80           |
+| Cmax, observed                                            | p = 0.003 (up)     | p = 0.74           |
+| AUC 0-360, observed                                       | p = 0.13           | p = 0.48           |
+| Terminal rate from t >= 180 min, observed (n = 8 per arm) | p = 0.73           | p = 0.44           |
 
 The observed Tmax and time-to-half-Cmax medians are zero because the sampling grid is 30 minutes wide. The terminal rate needs three positive samples at or after 180 min, which only 8 subjects per arm have, so it carries little weight.
 
@@ -97,15 +99,15 @@ The study design is simulated from `single_wave` truth: the 33 completers' actua
 
 Share of replicates with p < 0.05:
 
-| Truth (baseline `ka` / `kel`) | `ka` | `kel` | `max(ka, kel)` | `min(ka, kel)` |
-|---|---|---|---|---|
-| No change (0.040 / 0.025) | 0.01 | 0.02 | 0.03 | 0.04 |
-| No change (0.025 / 0.025) | 0.05 | 0.07 | 0.03 | 0.04 |
-| `ka` x 1.5 (0.040 / 0.025) | 0.71 | 0.12 | 0.92 | 0.21 |
-| `kel` x 1.5 (0.040 / 0.025) | 0.74 | 0.47 | 0.47 | 0.99 |
-| `ka` x 1.5 (0.025 / 0.025) | 0.74 | 0.49 | 0.92 | 0.70 |
-| `kel` x 1.5 (0.025 / 0.025) | 0.69 | 0.49 | 0.88 | 0.71 |
-| `ka` x 1.5 (0.020 / 0.050) | 0.48 | 0.24 | 0.12 | 1.00 |
+| Truth (baseline`ka` / `kel`) | `ka` | `kel` | `max(ka, kel)` | `min(ka, kel)` |
+| -------------------------------- | ------ | ------- | ---------------- | ---------------- |
+| No change (0.040 / 0.025)        | 0.01   | 0.02    | 0.03             | 0.04             |
+| No change (0.025 / 0.025)        | 0.05   | 0.07    | 0.03             | 0.04             |
+| `ka` x 1.5 (0.040 / 0.025)     | 0.71   | 0.12    | 0.92             | 0.21             |
+| `kel` x 1.5 (0.040 / 0.025)    | 0.74   | 0.47    | 0.47             | 0.99             |
+| `ka` x 1.5 (0.025 / 0.025)     | 0.74   | 0.49    | 0.92             | 0.70             |
+| `kel` x 1.5 (0.025 / 0.025)    | 0.69   | 0.49    | 0.88             | 0.71             |
+| `ka` x 1.5 (0.020 / 0.050)     | 0.48   | 0.24    | 0.12             | 1.00             |
 
 With no change, no test rejects more often than 7%. A `kel` change is flagged as a `ka` change in 74% of replicates, more often than as a `kel` change (47%). In the two diagonal scenarios the `ka`-up and `kel`-up rows are the same. Across scenarios, 45 to 59% of the fits had the fitted `ka` and `kel` in the wrong order relative to truth, and 32 to 47% ended on the diagonal. In the separated scenarios the median fitted `ka` is 0.09 to 0.26 too low (log) and `kel` 0.08 to 0.22 too high, because the fit pulls the two together.
 
@@ -117,26 +119,26 @@ The hypothesis for this study is that `ka` changes with the diet and `kel` stays
 
 The simulation in `07` repeats the scenarios of `06` with the shared fit (40 replicates per scenario):
 
-| Truth (baseline `ka` / `kel`) | `ka` rejection, shared `kel` | Bias in fitted `ka` change (log) |
-|---|---|---|
-| No change (0.040 / 0.025) | 0.08 | -0.01 |
-| No change (0.025 / 0.025) | 0.15 | 0.00 |
-| `ka` x 1.5 (0.040 / 0.025) | 1.00 | -0.03 |
-| `ka` x 1.5 (0.025 / 0.025) | 1.00 | -0.01 |
-| `ka` x 1.5 (0.020 / 0.050) | 1.00 | +0.05 |
-| `kel` x 1.5 (0.040 / 0.025), assumption violated | 1.00 | +0.44 |
-| `kel` x 1.5 (0.025 / 0.025), assumption violated | 1.00 | +0.41 |
+| Truth (baseline`ka` / `kel`)                   | `ka` rejection, shared `kel` | Bias in fitted`ka` change (log) |
+| -------------------------------------------------- | -------------------------------- | --------------------------------- |
+| No change (0.040 / 0.025)                          | 0.08                             | -0.01                             |
+| No change (0.025 / 0.025)                          | 0.15                             | 0.00                              |
+| `ka` x 1.5 (0.040 / 0.025)                       | 1.00                             | -0.03                             |
+| `ka` x 1.5 (0.025 / 0.025)                       | 1.00                             | -0.01                             |
+| `ka` x 1.5 (0.020 / 0.050)                       | 1.00                             | +0.05                             |
+| `kel` x 1.5 (0.040 / 0.025), assumption violated | 1.00                             | +0.44                             |
+| `kel` x 1.5 (0.025 / 0.025), assumption violated | 1.00                             | +0.41                             |
 
 When `kel` is stable, the shared fit detects a 1.5-fold `ka` change in every replicate and estimates its size without bias (the true log change is 0.41). When `kel` changes, the shared fit moves the entire `kel` change into `ka` (bias +0.44 against a true `kel` change of 0.41 in log units), and the `ka` test rejects in every replicate. The shared fit has a false-positive rate of 8% to 15% under no change, higher than the 1% to 7% of the independent fits. Only 0 to 3% of shared fits end on the diagonal.
 
 The shared fit therefore detects a rate change with high power. It cannot tell a `ka` change from a `kel` change, because the assumption forces any change into `ka`. A significant `ka` result under this fit has to be reported as conditional on a stable `kel`.
 
-On the real cohort (`fructose_shared_kel/02_fit_erie_model_fructose_shared_kel.R`), each visit keeps the mechanism that the independent fit selected, with its `f_delayed` and `t_lag` held at the independent estimates. The shared `kel` has the lower AIC in 26 of 33 subjects and is clearly worse (AIC higher by more than 2) in 5. Since the shared model has one parameter fewer, and since the simulation shows that it absorbs a real `kel` change without a large loss of fit, this agreement is weak evidence for a stable `kel`.
+On the real cohort (`scripts/02_fit_shared_kel.R`), each visit keeps the mechanism that the independent fit selected, with its `f_delayed` and `t_lag` held at the independent estimates. The shared `kel` has the lower AIC in 26 of 33 subjects and is clearly worse (AIC higher by more than 2) in 5. Since the shared model has one parameter fewer, and since the simulation shows that it absorbs a real `kel` change without a large loss of fit, this agreement is weak evidence for a stable `kel`.
 
-| Paired Wilcoxon on log(`ka` intervention / `ka` baseline) | High-fructose (n = 16) | Low-fructose (n = 17) |
-|---|---|---|
-| Independent fits | median +0.30, p = 0.093 | median -0.19, p = 0.11 |
-| Shared `kel` | median +0.50, p = 0.053 | median -0.09, p = 0.81 |
+| Paired Wilcoxon on log(`ka` intervention / `ka` baseline) | High-fructose (n = 16)  | Low-fructose (n = 17)  |
+| ------------------------------------------------------------- | ----------------------- | ---------------------- |
+| Independent fits                                              | median +0.30, p = 0.093 | median -0.19, p = 0.11 |
+| Shared`kel`                                                 | median +0.50, p = 0.053 | median -0.09, p = 0.81 |
 
 ## Statistics in the diet summaries
 

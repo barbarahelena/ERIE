@@ -10,12 +10,12 @@
 #   - how often the fitted ka/kel ordering is the wrong way round
 #   - bias in the fitted ka change (median log(ka_int/ka_base) vs truth)
 # Compare with simulation_summary.csv from 06 (independent fits).
-# Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/diagnostics_ka_kel/simulation/
+# Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/03_diagnostics_ka_kel/simulation/
 # =============================================================================
 options(erie.sim.lib = TRUE)
-source("scripts/diagnostics_ka_kel/06_simulate_ka_kel_recovery.R")
+source("scripts/06_simulate_ka_kel_recovery.R")
 
-BOUNDS_SHARED <- list(kel = c(0.005, 0.1), ka_b = c(1e-4, 1), ka_i = c(1e-4, 1), F_b = c(1e-4, 1), F_i = c(1e-4, 1))
+BOUNDS_SHARED <- list(kel = log(2) / c(70, 7), ka_b = c(1e-4, 1), ka_i = c(1e-4, 1), F_b = c(1e-4, 1), F_i = c(1e-4, 1))
 N_RANDOM_SHARED <- 25   # more than the 15 per curve in 06: 5 parameters instead of 3
 
 fit_shared <- function(times_b, y_b, times_i, y_i, dose_b, dose_i, Vd_b, Vd_i, seed) {

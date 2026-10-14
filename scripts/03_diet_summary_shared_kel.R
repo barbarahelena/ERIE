@@ -1,10 +1,15 @@
-# Diet-arm summary plots - fructose independent fit
+# Diet-arm summary plots - fructose fit with one kel per subject
 # Barbara Verhaar
 #
-# Counterpart to 03_diet_summary.R for the standalone fructose fit
-# (02_fit_erie_model_fructose_independent.R): same statistics and plot choices,
-# with every 13C6-specific piece (F_13C6, isotope faceting, dose_13C6_mg,
-# f_delayed_13C6) dropped, since that fit has no 13C6 curve at all.
+# Counterpart to scripts/archive/fructose_independent/03_diet_summary_fructose_independent.R for the shared-kel fit
+# (02_fit_shared_kel.R): same statistics and plot choices.
+# Every result is CONDITIONAL on a stable kel between a subject's two visits: the
+# fit forces any kel change into ka and F (docs/archive/ka-kel-identifiability.md), so each
+# plot carries a caption saying so. kel is an assumption with one value
+# per subject and no estimate per visit, so it is left out of every table, test and boxplot here; it
+# still enters the simulated curves and AUC. Mechanism (single_wave/two_wave) and the two_wave
+# f_delayed and t_lag come from the independent fit, where the shared fit holds
+# them fixed.
 
 # Libraries
 suppressMessages({
@@ -61,17 +66,24 @@ DIET_COLORS  <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
 VISIT_COLORS <- c(baseline = "#4477AA", intervention = "#CC6677")
 FINE_T_DIET <- seq(0, 400, by = 2)
 # Inclusion cutoff for this script's plots/statistics - separate from, and
-# stricter than, 02_fit_erie_model_fructose_independent.R's R2_RELIABLE_MIN.
-R2_INCLUDE_MIN <- 0.9
+# stricter than, the R2_RELIABLE_MIN of the fitting scripts.
+R2_INCLUDE_MIN <- 0.7
 
-# Open data
-results    <- read_csv("results/fructose_independent/fit_results.csv", show_col_types = FALSE)
+# Open data: the shared-kel fits (one row per subject) reshaped to one row per
+# subject x visit, plus the mechanism the independent fit selected for each visit.
+shared <- read_csv("results/02_shared_kel/shared_kel_fits.csv", show_col_types = FALSE)
+indep  <- read_csv("results/01_independent_fit/fit_results.csv", show_col_types = FALSE) %>%
+  select(subject_id, visit, model, f_delayed, t_lag)
+results <- bind_rows(
+  shared %>% transmute(subject_id, visit = "baseline",     ka = ka_b, kel = kel_shared, F = F_b, r2 = r2_b, kel_at_bound),
+  shared %>% transmute(subject_id, visit = "intervention", ka = ka_i, kel = kel_shared, F = F_i, r2 = r2_i, kel_at_bound)
+) %>% left_join(indep, by = c("subject_id", "visit"))
+CAPTION <- "Fit with one kel per subject: conditional on a stable kel between visits"
 covariates <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE)
 
-# All of this script's own outputs go in one subfolder, alongside
-# 02_fit_erie_model_fructose_independent.R's plots_individual/, rather than loose
-# in results/fructose_independent/.
-OUT_DIR <- "results/fructose_independent/diet_summary"
+# All of this script's own outputs go in
+# one subfolder of results/02_shared_kel/.
+OUT_DIR <- "results/02_shared_kel/diet_summary"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
 # Subjects who completed both visits (a body weight at each). ER33 and ER34 were
@@ -98,7 +110,7 @@ reliable_fits <- fits %>% filter(reliable)
 # What the plots and statistics use: completers with a reliable fit at BOTH visits,
 # so every summarised subject contributes a baseline/intervention pair.
 paired_ids   <- reliable_fits %>% filter(completed) %>% count(subject_id) %>% filter(n == 2) %>% pull(subject_id)
-summary_fits <- reliable_fits %>% filter(subject_id %in% paired_ids)
+summary_fits <- reliable_fits #%>% filter(subject_id %in% paired_ids)
 
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
 # Vd is the measured ECW, not a fit result, so it isn't gated on `reliable`.
@@ -117,14 +129,14 @@ p_vd <- ggplot(vd_data, aes(diet, Vd, fill = visit)) +
   scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
   labs(title = "Extracellular fluid volume",
        x = NULL, y = "Vd (L)", shape = "Sex") +
-  theme_Publication()
+  theme_Publication() + labs(caption = CAPTION)
 
 ggsave(file.path(OUT_DIR, "diet_vd_boxplot.pdf"), p_vd, width = 6, height = 5, dpi = 150)
 cat("\nSaved", file.path(OUT_DIR, "diet_vd_boxplot.pdf"), "\n")
 
 # ---- Fit quality (R2) ------------------------------------------------------
 # Not gated on `reliable` (which filters on r2 itself): a whole-cohort QC view.
-R2_RELIABLE_MIN <- 0.70   # matches 02_fit_erie_model_fructose_independent.R's own threshold
+R2_RELIABLE_MIN <- 0.70   # matches the independent fit's own threshold
 
 r2_data <- fits %>% filter(completed, !is.na(r2)) %>% transmute(subject_id, diet, visit, r2)
 
@@ -137,7 +149,7 @@ p_r2 <- ggplot(r2_data, aes(visit, r2, fill = diet)) +
   scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
   labs(title = "R2",
        x = NULL, y = expression(R^2)) +
-  theme_Publication()
+  theme_Publication() + labs(caption = CAPTION)
 
 ggsave(file.path(OUT_DIR, "diet_r2_boxplot.pdf"), p_r2, width = 7, height = 5, dpi = 150)
 cat("\nSaved", file.path(OUT_DIR, "diet_r2_boxplot.pdf"), "\n")
@@ -158,7 +170,6 @@ summarise_param <- function(param) {
 
 param_table <- bind_rows(
   summarise_param("ka"),
-  summarise_param("kel"),
   summarise_param("F")
 ) %>% arrange(parameter, diet, visit)
 
@@ -167,11 +178,10 @@ cat("=== Parameter summary by diet x visit (reliable fits only) ===\n")
 print(as.data.frame(param_table), digits = 3)
 
 # ---- Boxplot: diet x visit distributions for each parameter ---------------
-PARAM_LABELS <- c(ka = "ka (1/min)", kel = "kel (1/min)", F = "F")
+PARAM_LABELS <- c(ka = "ka (1/min)", F = "F")
 
 box_data <- bind_rows(
   summary_fits %>% transmute(subject_id, diet, visit, parameter = "ka", value = ka),
-  summary_fits %>% transmute(subject_id, diet, visit, parameter = "kel", value = kel),
   summary_fits %>% transmute(subject_id, diet, visit, parameter = "F", value = F)
 )
 
@@ -187,7 +197,7 @@ param_deltas <- box_data %>%
 param_wilcoxon <- param_deltas %>%
   group_by(parameter, diet) %>%
   summarise(n_paired = n(), median_delta = median(delta),
-            p = if (n() >= 3) tryCatch(wilcox.test(delta, mu = 0)$p.value, error = function(e) NA_real_) else NA_real_,
+            p = if (n() >= 3) tryCatch(wilcox.test(delta)$p.value, error = function(e) NA_real_) else NA_real_,
             .groups = "drop") %>%
   mutate(label = case_when(is.na(p) ~ sprintf("n=%d", n_paired),
                            p < 0.001 ~ sprintf("p<0.001 (n=%d)", n_paired),
@@ -225,10 +235,10 @@ plot_param_boxplot <- function(param_name) {
      else scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
     labs(subtitle = interaction_subtitle(ann), title = PARAM_LABELS[[param_name]], x = NULL, y = NULL) +
-    theme_Publication()
+    theme_Publication() + labs(caption = CAPTION)
 }
 
-for (param_name in c("ka", "kel", "F")) {
+for (param_name in c("ka", "F")) {
   p <- plot_param_boxplot(param_name)
   if (!is.null(p)) {
     out_path <- file.path(OUT_DIR, sprintf("diet_parameter_boxplot_%s.pdf", param_name))
@@ -274,7 +284,7 @@ if (nrow(two_wave_completed) >= 4) {
     scale_fill_manual(values = DIET_COLORS, labels = DIET_LABELS, name = NULL) +
     labs(title = sprintf("Two-wave characteristics by diet arm (exploratory, n=%d curves)", nrow(two_wave_completed)),
          x = NULL, y = NULL) +
-    theme_Publication()
+    theme_Publication() + labs(caption = CAPTION)
   ggsave(file.path(OUT_DIR, "diet_two_wave_boxplot.pdf"), p_two_wave, width = 7, height = 4.5, dpi = 150)
   cat("\nSaved", file.path(OUT_DIR, "diet_two_wave_boxplot.pdf"), ",", file.path(OUT_DIR, "diet_two_wave_rate.csv"), ",", file.path(OUT_DIR, "diet_two_wave_params.csv"), "\n")
 } else {
@@ -282,8 +292,9 @@ if (nrow(two_wave_completed) >= 4) {
 }
 
 # ---- Average concentration-time curves per diet x visit --------------------
-# Must mirror simulate_fit() in 02_fit_erie_model_fructose_independent.R exactly:
-# the mechanism that won for each subject x visit determines the curve.
+# Mirrors simulate_fit() in scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R: the mechanism
+# the independent fit selected for each subject x visit determines the curve,
+# drawn here with the shared-kel ka, kel and F.
 curve_matrix <- function(diet_val, vis, completed_only = TRUE) {
   sub <- (if (completed_only) summary_fits else reliable_fits) %>% filter(diet == diet_val, visit == vis)
   if (nrow(sub) == 0) return(NULL)
@@ -364,7 +375,7 @@ plot_diet_curves <- function(stat) {
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
     labs(title = paste0(CURVE_STATS[[stat]]$title, ": baseline vs intervention"),
          x = "Time (min)", y = "Concentration (mg/L)") +
-    theme_Publication()
+    theme_Publication() + labs(caption = CAPTION)
 }
 
 for (stat in names(CURVE_STATS)) {
@@ -450,7 +461,7 @@ for (metric in names(METRIC_LABELS)) {
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.15))) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
     labs(subtitle = interaction_subtitle(ann), title = metric, x = NULL, y = METRIC_LABELS[[metric]]) +
-    theme_Publication()
+    theme_Publication() + labs(caption = CAPTION)
   out_path <- file.path(OUT_DIR, sprintf("diet_curve_%s_boxplot.pdf", tolower(metric)))
   ggsave(out_path, p, width = 7, height = 5, dpi = 150)
   cat("\nSaved", out_path, "\n")

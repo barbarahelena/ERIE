@@ -4,8 +4,8 @@
 # Simulates the design of the study (same subjects' sampling times, Vd and
 # doses, both visits) from single_wave truth with known ka and kel, adds noise
 # at the level of the real fits, refits every curve exactly as
-# 02_fit_erie_model_fructose_independent.R does for single_wave (same
-# objective, penalties and bounds; fewer random seeds), and runs the paired
+# scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R does for single_wave (same
+# objective and penalties, the current kel bounds, fewer random seeds), and runs the paired
 # Wilcoxon on ka, kel, max(ka, kel) and min(ka, kel). Per scenario it reports:
 #   - rejection rate at p < 0.05 for each quantity (power if the quantity
 #     truly changed, false-positive rate if not)
@@ -16,21 +16,21 @@
 #   null_diag, ka_up_diag, kel_up_diag    0.025 / 0.025  on the diagonal
 #   ka_up_flip                            0.020 / 0.050  kel > ka
 # Limitation: truth has no second wave; real curves with two waves are harder.
-# Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/diagnostics_ka_kel/simulation/
+# Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/03_diagnostics_ka_kel/simulation/
 # =============================================================================
 suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(purrr) })
 source("scripts/assets/pk_curves.R")
 source("scripts/assets/pk_fit.R")
 
-OUT_DIR <- "results/diagnostics_ka_kel/simulation"
+OUT_DIR <- "results/03_diagnostics_ka_kel/simulation"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 N_REPS  <- as.integer(Sys.getenv("ERIE_SIM_REPS", unset = "50"))
 N_CORES <- as.integer(Sys.getenv("ERIE_N_CORES", unset = max(1, parallel::detectCores() - 2)))
 SIM_SEED <- 11
 
-# Same settings as 02_fit_erie_model_fructose_independent.R
+# Same settings as scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R
 MIN_TMAX <- 10; CMAX_TOL <- 0.10; CMAX_LAMBDA <- 20; TMAX_LAMBDA <- 50
-BOUNDS_INDEP <- list(ka = c(1e-4, 1), kel = c(0.005, 0.1), F = c(1e-4, 1))
+BOUNDS_INDEP <- list(ka = c(1e-4, 1), kel = log(2) / c(70, 7), F = c(1e-4, 1))
 N_RANDOM_INDEP <- 15   # the independent fit uses 40; fewer here to keep the simulation affordable
 FINE_T <- seq(0, 400, length.out = 50)
 
@@ -45,7 +45,7 @@ design <- conc %>% filter(subject_id %in% completers) %>%
 
 # Noise: additive, at the level of the real single-fit residuals (the objective is unweighted)
 # Taken from the better of each curve's single_wave and two_wave fit, so unmodelled second waves don't inflate it.
-rss_of <- function(f) read_csv(file.path("results/fructose_independent", f), show_col_types = FALSE) %>% select(subject_id, visit, rss, n)
+rss_of <- function(f) read_csv(file.path("results/01_independent_fit", f), show_col_types = FALSE) %>% select(subject_id, visit, rss, n)
 real <- bind_rows(rss_of("fit_results_single_wave.csv"), rss_of("fit_results_two_wave.csv")) %>%
   filter(!is.na(rss)) %>% group_by(subject_id, visit) %>% slice_min(rss, n = 1, with_ties = FALSE) %>% ungroup()
 NOISE_SD <- median(sqrt(real$rss / real$n))
@@ -103,8 +103,12 @@ run_rep <- function(sc, rep) {
       filter(is.finite(baseline), is.finite(intervention))
     tryCatch(wilcox.test(log(w$intervention / w$baseline), mu = 0, exact = FALSE)$p.value, error = function(e) NA_real_)
   }
+  ka_w <- fits %>% select(subject_id, visit, ka, ka_true) %>% pivot_wider(names_from = visit, values_from = c(ka, ka_true)) %>%
+    filter(is.finite(ka_baseline), is.finite(ka_intervention))
   tibble(scenario = sc$scenario, rep = rep,
          p_ka = pw("ka"), p_kel = pw("kel"), p_k_fast = pw("k_fast"), p_k_slow = pw("k_slow"),
+         # same definition as 07: median fitted log ka change minus the median true one
+         bias_ka_change = median(log(ka_w$ka_intervention / ka_w$ka_baseline)) - median(log(ka_w$ka_true_intervention / ka_w$ka_true_baseline)),
          bias_log_ka = median(log(fits$ka / fits$ka_true), na.rm = TRUE),
          bias_log_kel = median(log(fits$kel / fits$kel_true), na.rm = TRUE),
          swapped = mean((fits$ka < fits$kel) != (fits$ka_true < fits$kel_true) & abs(fits$ka_true - fits$kel_true) > 1e-9, na.rm = TRUE),
@@ -126,7 +130,7 @@ summ <- out %>% group_by(scenario) %>%
   summarise(reps = n(),
             rej_ka = mean(p_ka < 0.05, na.rm = TRUE), rej_kel = mean(p_kel < 0.05, na.rm = TRUE),
             rej_k_fast = mean(p_k_fast < 0.05, na.rm = TRUE), rej_k_slow = mean(p_k_slow < 0.05, na.rm = TRUE),
-            bias_ka = median(bias_log_ka), bias_kel = median(bias_log_kel),
+            bias_ka = median(bias_log_ka), bias_kel = median(bias_log_kel), bias_ka_change = median(bias_ka_change),
             swapped = mean(swapped), on_diagonal = mean(on_diagonal), ka_above_0.1 = mean(ka_above_0.1),
             .groups = "drop") %>% arrange(match(scenario, scenarios$scenario))
 write_csv(summ, file.path(OUT_DIR, "simulation_summary.csv"))

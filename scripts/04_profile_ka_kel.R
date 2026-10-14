@@ -9,13 +9,13 @@
 #
 # Because the Bateman curve is symmetric in (ka, kel) up to the scale of F, the
 # profile is symmetric about the diagonal: an off-diagonal minimum comes as a
-# mirrored pair. Output: results/diagnostics_ka_kel/profile_ka_kel.csv
+# mirrored pair. Output: results/03_diagnostics_ka_kel/profile_ka_kel.csv
 # =============================================================================
 suppressPackageStartupMessages({ library(dplyr); library(readr) })
 source("scripts/assets/pk_curves.R")
 
-FIT_DIR <- "results/fructose_independent"
-OUT <- "results/diagnostics_ka_kel"
+FIT_DIR <- "results/01_independent_fit"
+OUT <- "results/03_diagnostics_ka_kel"
 dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
 fits <- read_csv(file.path(FIT_DIR, "fit_results.csv"), show_col_types = FALSE) %>%
   filter(model == "single_wave")
