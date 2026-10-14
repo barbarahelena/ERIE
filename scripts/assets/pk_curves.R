@@ -40,14 +40,14 @@
 #' @param ka,kel,Fbio,dose,Vd See file header for conventions.
 #' @return Numeric vector of concentrations at `t`.
 bateman_conc <- function(t, ka, kel, Fbio, dose, Vd) {
-  # ka == kel is a removable singularity in the standard Bateman formula;
-  # use the limiting form instead of dividing by (ka - kel) ~= 0.
-  if (abs(ka - kel) < 1e-8) {
-    amount <- Fbio * ka * dose * t * exp(-ka * t)
-  } else {
-    amount <- (Fbio * ka * dose / (ka - kel)) * (exp(-kel * t) - exp(-ka * t))
-  }
-  amount / Vd
+  # (exp(-kel t) - exp(-ka t)) / (ka - kel) written as
+  # t * exp(-kel t) * (-expm1(-d t)) / (d t), d = ka - kel. This avoids the
+  # cancellation of two nearly equal exponentials as ka -> kel and is smooth
+  # through d = 0, where it equals t * exp(-ka t) (the limiting form).
+  d <- ka - kel
+  dt <- d * t
+  shape <- ifelse(abs(dt) < 1e-10, 1, -expm1(-dt) / ifelse(dt == 0, 1, dt))
+  Fbio * ka * dose * t * exp(-kel * t) * shape / Vd
 }
 
 #' Time of peak concentration (Tmax) for the one-compartment oral model

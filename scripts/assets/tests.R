@@ -46,6 +46,41 @@ check("bateman_conc() is continuous across the ka==kel singularity", {
   max(abs(c_exact - c_close)) / max(c_exact) < 1e-3
 })
 
+check("bateman_conc() matches the textbook Bateman form away from ka==kel, for ka < kel and ka > kel", {
+  t <- c(0, 15, 30, 60, 120, 240, 360)
+  textbook <- function(ka, kel) 0.2 * ka * 100 / (ka - kel) * (exp(-kel * t) - exp(-ka * t)) / 10
+  all(abs(bateman_conc(t, 0.05, 0.02, 0.2, 100, 10) - textbook(0.05, 0.02)) < 1e-12,
+      abs(bateman_conc(t, 0.02, 0.05, 0.2, 100, 10) - textbook(0.02, 0.05)) < 1e-12)
+})
+
+check("bateman_conc() is smooth for ka-kel from 1e-12 to 1e-6 (no cancellation noise)", {
+  t <- c(30, 60, 120, 240, 360)
+  ref <- bateman_conc(t, 0.03, 0.03, 0.2, 100, 10)
+  worst <- max(vapply(10^(-12:-6), function(d)
+    max(abs(bateman_conc(t, 0.03 + d, 0.03, 0.2, 100, 10) - ref) / ref), numeric(1)))
+  worst < 1e-3 && all(is.finite(bateman_conc(t, 0.03 + 1e-14, 0.03, 0.2, 100, 10)))
+})
+
+# ---- mixed_visit_tests(): recovers known within-group and between-group effects ----
+
+check("mixed_visit_tests() recovers a known visit effect per group and the interaction, and returns NA when nothing varies within subject", {
+  source("scripts/assets/pk_stats.R")
+  set.seed(1)
+  n <- 30
+  d <- expand.grid(subject_id = paste0("S", 1:(2 * n)), visit = c("baseline", "intervention"), stringsAsFactors = FALSE)
+  d$diet <- ifelse(as.integer(sub("S", "", d$subject_id)) <= n, "low_fructose", "high_fructose")
+  subj <- rnorm(2 * n, 0, 0.3)[as.integer(sub("S", "", d$subject_id))]
+  true_effect <- ifelse(d$diet == "high_fructose", 0.4, 0) * (d$visit == "intervention")
+  d$value <- exp(2 + subj + true_effect + rnorm(nrow(d), 0, 0.1))
+  r <- mixed_visit_tests(d)
+  ok_effects <- abs(r$lmm_estimate[r$diet == "high_fructose"] - 0.4) < 0.1 && abs(r$lmm_estimate[r$diet == "low_fructose"]) < 0.1
+  ok_interaction <- r$p_interaction[1] < 0.001 && abs(r$interaction_estimate[1] - 0.4) < 0.1
+  ok_ci <- r$lmm_lo[r$diet == "high_fructose"] < 0.4 && r$lmm_hi[r$diet == "high_fructose"] > 0.4
+  const <- d; const$value <- exp(subj[match(const$subject_id, d$subject_id)])   # identical at both visits
+  ok_na <- all(is.na(mixed_visit_tests(const)$p_lmm))
+  ok_effects && ok_interaction && ok_ci && ok_na
+})
+
 # ---- bateman_tmax() matches the actual numerical peak of bateman_conc() ----
 
 check("bateman_tmax() matches bateman_conc()'s numerical peak", {
@@ -163,6 +198,29 @@ check("adaptive_retry() also retries a row with no bound flag via extra_flag_col
     out$a[1] == 1 && out$a[3] == 3       # unflagged rows untouched
 })
 
+check("adaptive_retry()'s own retry seeds are reproducible regardless of the RNG state beforehand", {
+  bounds <- list(a = c(0, 10), b = c(0, 1))
+  results <- tibble(a = c(9.999, 3), b = c(0.5, 0.3),
+                     a_at_bound = c(TRUE, FALSE),
+                     objective_value = c(0.9, 0.3))
+  captured <- NULL
+  refit <- function(i, seeds, maxit) {
+    captured <<- seeds   # only row 1 is flagged, so this always captures that row's seeds
+    tibble(a = 9.999, b = 0.5, a_at_bound = TRUE, objective_value = 0.9)   # never improves - isolates the seeds themselves
+  }
+  set.seed(42); invisible(runif(100))   # perturb the ambient RNG state differently before each call
+  adaptive_retry(results, bound_cols = c(a_at_bound = "a"), bounds = bounds, par_cols = c("a", "b"),
+                 refit_fn = refit, mc.cores = 1, verbose = FALSE)
+  seeds_run1 <- captured
+
+  set.seed(7); invisible(runif(37))
+  adaptive_retry(results, bound_cols = c(a_at_bound = "a"), bounds = bounds, par_cols = c("a", "b"),
+                 refit_fn = refit, mc.cores = 1, verbose = FALSE)
+  seeds_run2 <- captured
+
+  identical(seeds_run1, seeds_run2)
+})
+
 check("adaptive_retry()'s retried/retry_improved columns distinguish never-flagged, improved, and retried-but-not-improved", {
   bounds <- list(a = c(0, 10), b = c(0, 1))
   results <- tibble(a = c(1, 9.999, 3, 4), b = c(0.1, 0.5, 0.3, 0.5),
@@ -189,6 +247,19 @@ check("watson_ecf_volume() matches hand-computed values, and only males use age"
   abs(male - 14.9562) < 1e-4 && abs(female - 10.1125) < 1e-4 &&
     watson_ecf_volume(60, 165, NA, "female") == female &&
     is.na(watson_ecf_volume(80, 180, NA, "male"))
+})
+
+# ---- has_near_peak_neighbor(): peak-at-t=30 is excluded, not just neighbor-at-t=30 ----
+
+check("has_near_peak_neighbor() excludes a peak AT t=30, mirroring the neighbor-at-30 exclusion", {
+  # Peak at t=30, near-tall neighbor at t=60: an early single peak (at or
+  # before t=30) declining slowly can produce exactly this shape, so it must
+  # NOT count as second-wave evidence (this is the case the fix targets).
+  peak_at_30 <- !has_near_peak_neighbor(c(0, 30, 60, 90), c(1, 100, 90, 40))
+  # Same shape shifted one sample later (peak at t=60, tall neighbor at
+  # t=90) is NOT excluded - a real signature the detector should still catch.
+  peak_at_60 <- has_near_peak_neighbor(c(0, 30, 60, 90), c(1, 50, 100, 90))
+  peak_at_30 && peak_at_60
 })
 
 cat("\nAll", n_pass, "tests passed.\n")

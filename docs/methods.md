@@ -1,0 +1,41 @@
+# Methods
+
+## Fructose challenge test
+
+Participants underwent a fructose challenge test (FCT) before (baseline) and after (intervention) the 4-week dietary intervention [diet description, randomization and trial registration in the preceding sections]. After an overnight fast [confirm duration], participants drank 1 g/kg body weight of unlabeled fructose dissolved in [volume] mL of water. [A capsule containing 120 mg of 13C6-labeled fructose was taken together with the drink; the tracer data are reported separately.] Venous blood was sampled before the dose (t = 0) and at 30, 60, 90, 120, 150, 180, 240 and 360 min afterwards, and plasma fructose was measured by [analytical method]. Body weight was measured at each test, and extracellular water (ECW) was measured by [method] at each visit. When ECW was missing at baseline (n = 2), the value measured at the intervention visit was used.
+
+## Pharmacokinetic model
+
+Plasma concentrations were converted from µmol/L to mg/L (molecular weight of fructose 180.16 g/mol), and the fasting concentration of each test was subtracted from all subsequent samples, so that the curve describes the fructose derived from the dose. Plasma fructose was then described with a one-compartment model with first-order absorption and first-order elimination:
+
+$$
+C(t) = \frac{F \, k_a \, D}{V_d \, (k_a - k_{el})} \left( e^{-k_{el} t} - e^{-k_a t} \right) \tag{1}
+$$
+
+where $C(t)$ is the baseline-corrected concentration (mg/L) at time $t$ (min) after the dose, $D$ the dose (1000 mg per kg body weight at that visit), $k_a$ and $k_{el}$ the absorption and elimination rate constants (min⁻¹), and $F$ the fraction of the dose that reached the circulation. When $k_a = k_{el}$, Equation 1 is undefined (0/0); the concentration is then given by its limiting form, $C(t) = F k_a D \, t \, e^{-k_a t} / V_d$. The volume of distribution $V_d$ was set to the ECW measured at the same visit, assuming that fructose, like glucose, distributes in the extracellular fluid [ref: van der Crabben et al., Metabolism 2011]. Estimates of $F$ depend on this assumed volume.
+
+Visual inspection showed that many curves declined after a first peak and then rose again to a second peak. A single absorption phase cannot produce this shape, because Equation 1 decreases monotonically after its maximum. We therefore also fitted an extension in which a fraction $f$ of the dose entered the absorption process after a delay $t_{lag}$, consistent with a second phase of gastric emptying:
+
+$$
+C_{2}(t) = C\left(t;\,(1-f)D\right) + C\left(t - t_{lag};\,f D\right) \tag{2}
+$$
+
+with $C(t) = 0$ for $t \le 0$. Both portions share $k_a$, $k_{el}$ and $F$. Equations 1 and 2 are referred to as the single-phase and the two-phase model.
+
+## Parameter estimation
+
+The models were fitted to the curve of each participant and visit by bounded nonlinear least squares (L-BFGS-B). The objective was the residual sum of squares divided by the total sum of squares of the observed concentrations, with two smooth penalties: one on a predicted time to peak concentration (Tmax) earlier than 10 min, which prevents a sharp spike between the fasting sample and the first post-dose sample, and one on a predicted peak concentration (Cmax) that deviated more than 10% from the observed maximum. The penalties were evaluated on a fine time grid, and in the two-phase model the Tmax penalty also applied to each phase separately. Parameters were bounded to $k_a \in [10^{-4}, 1]$ min⁻¹, $k_{el} \in [0.0099, 0.099]$ min⁻¹ (half-life 7–70 min, centered on the ~20–25 min reported in normal subjects [ref: Smith et al., J Clin Invest 1953]), $F \in [10^{-4}, 1]$, $f \in [0.001, 0.999]$ and $t_{lag} \in [5, 150]$ min. The upper bound of $t_{lag}$ excluded a second phase in the widely spaced late samples, and when the 30-min concentration exceeded 5 mg/L, the lower bound was raised to 30 min, since absorption had then clearly started before the first sample. Because the objective has several local minima, each fit was started from 50–80 initial values (fixed values, values with $k_a = k_{el}$, and values drawn log-uniformly within the bounds), and the best solution was retained. Fits with an R² below 0.70, an elimination rate at its bound or no convergence were repeated with a denser set of initial values, and the new solution was accepted when it improved the objective.
+
+The two-phase model was considered only when the 30-min sample was available and the observed curve itself showed evidence of a second phase: a post-peak sample at least 15% above the line connecting its neighbouring samples, a sample adjacent to the peak reaching at least 85% of the peak, or a poor fit of the single-phase model (R² < 0.50). The model with the lower Akaike information criterion, $\text{AIC} = n \ln(\text{RSS}/n) + 2k$, with $k = 3$ for the single-phase and $k = 5$ for the two-phase model, was then selected. When the post-peak rise was 90% or more above the connecting line, the two-phase model was selected without the AIC comparison.
+
+## Shared elimination rate
+
+In a curve described by Equation 1, $k_a$ and $k_{el}$ are interchangeable: exchanging the two values and multiplying $F$ by $k_a/k_{el}$ gives an identical curve. A single curve therefore identifies a fast and a slow rate, without indicating which of the two represents absorption, and in simulations of the present sampling design a 1.5-fold change in $k_{el}$ was estimated as a change in $k_a$ in 72–85% of replicates (Supplementary Figure [X]). Based on the hypothesis that the diet affects intestinal absorption of fructose and leaves its elimination unchanged, the primary analysis estimated the two visits of each participant jointly, with one $k_{el}$ per participant and a separate $k_a$ and $F$ for each visit. With a shared $k_{el}$, an exchange of the rate constants would require identical $k_a$ at both visits, so the change in $k_a$ between visits becomes identifiable. In the same simulations, the joint fit detected a 1.5-fold change in $k_a$ in all replicates with a median error of −0.03 to +0.05 in the log change, against 76–82% and an underestimated change when each visit was fitted alone (Supplementary Figure [X]). Each visit kept the model structure (single- or two-phase) selected in the individual fit, with $f$ and $t_{lag}$ fixed at their individual estimates, and the same objective and penalties were used. The agreement of the data with a stable $k_{el}$ was assessed by comparing the AIC of the joint fit with that of the two individual fits. Results of this analysis are conditional on a stable $k_{el}$, since any change in elimination is attributed to $k_a$ or $F$.
+
+## Pharmacokinetic outcomes
+
+Fits with an R² of at least 0.70 and an elimination rate away from both of its bounds were included in the analysis. Outcomes were $k_a$ and $F$ from the joint fit, and Cmax, Tmax and the area under the curve (AUC) derived from each participant's fitted curve. Cmax and Tmax were read from the fitted curve at a 2-min resolution, and AUC from zero to infinity was calculated as $F D / (V_d \, k_{el})$, which applies to both model structures. Group concentration-time profiles were summarized per diet arm and visit as the pointwise Harrell-Davis median of the fitted individual curves, with 95% confidence intervals from 1000 bootstrap resamples of participants.
+
+## Statistical analysis
+
+Changes from baseline to intervention were tested within each diet arm with the Wilcoxon signed-rank test on log-transformed values (Tmax untransformed). Differences between the diet arms were tested with a linear mixed model with diet, visit and their interaction as fixed effects and a random intercept per participant, fitted by restricted maximum likelihood on log-transformed values (Tmax untransformed). The diet × visit interaction tested whether the change from baseline differed between arms, and within-arm changes are reported with 95% confidence intervals. The proportion of curves requiring the two-phase model was compared between arms with Fisher's exact test. A two-sided p < 0.05 was considered statistically significant, and no correction for multiple testing was applied. Analyses were performed in R version 4.5.3 with the nlme package (version 3.1-170).

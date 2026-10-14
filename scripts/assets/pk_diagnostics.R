@@ -118,7 +118,8 @@ peak_dip_rise_info <- function(times, conc, min_rise_frac = 0.15, min_first_peak
 #'   height (default 0.85, i.e. 85%).
 #' @return TRUE if the point immediately before or immediately after the
 #'   curve's own maximum (EXCLUDING t=30, see below) is at least
-#'   `near_peak_frac` of the peak's height.
+#'   `near_peak_frac` of the peak's height, and the maximum itself is not at
+#'   t=30 (see below).
 has_near_peak_neighbor <- function(times, conc, near_peak_frac = 0.85) {
   ord <- order(times)
   t <- times[ord]; c <- conc[ord]
@@ -127,6 +128,12 @@ has_near_peak_neighbor <- function(times, conc, near_peak_frac = 0.85) {
   peak_idx <- which.max(c)
   peak <- c[peak_idx]
   if (peak <= 0) return(FALSE)
+  # A peak AT t=30 is excluded outright, not just as a neighbor (see below):
+  # the true peak may sit anywhere at or before the first sample, so a nearly
+  # as tall point at t=60 reflects an early single peak's slow decline over
+  # that window, not evidence of a second wave arriving around t=60. Mirrors
+  # the neighbor-at-30 exclusion below, for the mirror-image case.
+  if (t[peak_idx] == 30) return(FALSE)
   neighbor_idx <- c(peak_idx - 1, peak_idx + 1)
   neighbor_idx <- neighbor_idx[neighbor_idx >= 1 & neighbor_idx <= n]
   # t=30 is excluded as a valid neighbor: it's the first real sample for
