@@ -9,13 +9,11 @@ version = "0.1.0"
 01-clean-data = "Rscript scripts/01_clean_data.R"
 02-fit-shared-kel = "Rscript scripts/02_fit_shared_kel.R"
 03-diet-summary-shared-kel = { cmd = "Rscript scripts/03_diet_summary_shared_kel.R", depends-on = ["02-fit-shared-kel"] }
-04-profile-ka-kel = "Rscript scripts/04_profile_ka_kel.R"
-05-identified-quantities = "Rscript scripts/05_identified_quantities.R"
-06-simulate-ka-kel = "Rscript scripts/06_simulate_ka_kel_recovery.R"
-07-simulate-shared-kel = "Rscript scripts/07_simulate_shared_kel.R"
-08-plot-simulations = "Rscript scripts/08_plot_simulations.R"
-09-fit-13C6 = { cmd = "Rscript scripts/09_fit_13C6.R", depends-on = ["02-fit-shared-kel"] }
-10-diet-summary-13C6 = { cmd = "Rscript scripts/10_diet_summary_13C6.R", depends-on = ["09-fit-13C6"] }
+04-simulate-ka-kel = { cmd = "Rscript scripts/04_simulate_ka_kel_recovery.R", depends-on = ["02-fit-shared-kel"] }
+05-simulate-shared-kel = { cmd = "Rscript scripts/05_simulate_shared_kel.R", depends-on = ["02-fit-shared-kel"] }
+06-plot-simulations = "Rscript scripts/06_plot_simulations.R"
+07-fit-13C6 = { cmd = "Rscript scripts/07_fit_13C6.R", depends-on = ["02-fit-shared-kel"] }
+08-diet-summary-13C6 = { cmd = "Rscript scripts/08_diet_summary_13C6.R", depends-on = ["07-fit-13C6"] }
 pipeline = { depends-on = ["01-clean-data", "03-diet-summary-shared-kel"] }
 test-engine = "Rscript scripts/assets/tests.R"
 

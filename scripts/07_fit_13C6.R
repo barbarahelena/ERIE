@@ -1,33 +1,16 @@
 # =============================================================================
-# 09_fit_13C6.R - the 13C6 tracer curve with the rates of the 12C fit held fixed
-#
-# For each completer x visit, ka (that visit) and kel (shared per subject) come
-# from 02_fit_shared_kel.R and are not refitted; 12C's mechanism and t_lag come
-# from the independent fit in results/01_independent_fit/. Only the parameters
-# specific to the tracer capsule are fitted. Three 13C6 mechanisms, as in the
-# archived joint model (scripts/archive/joint_12C_13C6/02_fit_erie_model.R):
-#   release      capsule dissolution at rate k_release (K=2). When 12C is two_wave,
-#                13C6 gets its own f_delayed_13C6 at 12C's t_lag (K=3).
-#   onset_lag    instant bolus starting at t_lag1_13C6 in [0, 90] (K=2); tried
-#                when the first sample is below 25% of the peak.
-#   second_wave  instant bolus with its own late wave, f_delayed2_13C6 in
-#                [0.05, 0.95] and t_lag2_13C6 in [30, 150] (K=3); tried when 13C6's
-#                own data show a dip or plateau, rejected at the f lower bound.
-# The mechanism with the lowest AIC on 13C6's raw residuals is kept. Same
-# objective and penalties as 02. 13C6 has no endogenous level, so no baseline
-# correction. Every result is conditional on the stable-kel assumption of 02.
-#
-# Outputs (results/04_13C6_fixed_rates/):
-#   fits_13C6.csv            per subject x visit: fixed rates, mechanism, F_13C6, R2, AIC per candidate
-#   plots_individual/*.pdf   12C (shared-kel fit) and 13C6 per visit
+# 07_fit_13C6.R - 13C6 fitted with ka and kel fixed at the 12C shared-kel fit
+# Mechanisms, bounds and selection: docs/pk-model.md, "The 13C6 tracer with fixed rates".
+# Output (results/03_13C6_fixed_rates/): fits_13C6.csv, plots_individual/
 # =============================================================================
-suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(purrr); library(ggplot2) })
+suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(purrr); library(ggplot2); library(grid); library(ggthemes) })
 source("scripts/assets/pk_curves.R")
 source("scripts/assets/pk_fit.R")
+source("scripts/assets/theme_publication.R")
 source("scripts/assets/pk_diagnostics.R")
 source("scripts/assets/pred_13C6.R")   # pred_13C6(): the prediction per mechanism
 
-OUT_DIR <- "results/04_13C6_fixed_rates"; dir.create(file.path(OUT_DIR, "plots_individual"), showWarnings = FALSE, recursive = TRUE)
+OUT_DIR <- "results/03_13C6_fixed_rates"; dir.create(file.path(OUT_DIR, "plots_individual"), showWarnings = FALSE, recursive = TRUE)
 N_CORES <- as.integer(Sys.getenv("ERIE_N_CORES", unset = 1))
 MIN_TMAX <- 10; CMAX_TOL <- 0.10; CMAX_LAMBDA <- 20; TMAX_LAMBDA <- 50
 BOUNDS_RELEASE <- list(F_13C6 = c(1e-4, 1), k_release = c(0.001, 1), f_delayed_13C6 = c(0.001, 0.999))
@@ -46,13 +29,13 @@ conc_all <- read_csv("data/processed/erie_concentrations.csv", show_col_types = 
   mutate(conc_mgL = if_else(isotope == "12C", conc_mgL - conc_mgL[time_min == 0][1], conc_mgL)) %>% ungroup()
 conc13 <- conc_all %>% filter(isotope == "13C6", time_min > 0)
 
-shared <- read_csv("results/02_shared_kel/shared_kel_fits.csv", show_col_types = FALSE)
-indep  <- read_csv("results/01_independent_fit/fit_results.csv", show_col_types = FALSE) %>%
-  select(subject_id, visit, model_12C = model, f_delayed_12C = f_delayed, t_lag_12C = t_lag)
+shared <- read_csv("results/01_shared_kel/shared_kel_fits.csv", show_col_types = FALSE)
 rates <- bind_rows(
-  shared %>% transmute(subject_id, visit = "baseline", ka = ka_b, kel = kel_shared, F_12C = F_b, r2_12C = r2_b),
-  shared %>% transmute(subject_id, visit = "intervention", ka = ka_i, kel = kel_shared, F_12C = F_i, r2_12C = r2_i)) %>%
-  filter(!is.na(ka)) %>% left_join(indep, by = c("subject_id", "visit")) %>% arrange(subject_id, visit)
+  shared %>% transmute(subject_id, visit = "baseline", model_12C = model_b, ka = ka_b, kel = kel_shared, F_12C = F_b,
+                       f_delayed_12C = f_delayed_b, t_lag_12C = t_lag_b, r2_12C = r2_b),
+  shared %>% transmute(subject_id, visit = "intervention", model_12C = model_i, ka = ka_i, kel = kel_shared, F_12C = F_i,
+                       f_delayed_12C = f_delayed_i, t_lag_12C = t_lag_i, r2_12C = r2_i)) %>%
+  filter(!is.na(ka)) %>% arrange(subject_id, visit)
 
 fit_curve_13C6 <- function(i) {
   r <- rates[i, ]; sid <- r$subject_id; vis <- r$visit
@@ -120,7 +103,7 @@ curve_rows <- function(r) {
   cv <- cov %>% filter(subject_id == r$subject_id, visit == r$visit)
   bolus12 <- function(tt, dose) bateman_conc(tt, r$ka, r$kel, r$F_12C, dose, cv$vd_L)
   c12 <- if (r$model_12C == "two_wave") {
-    f <- indep %>% filter(subject_id == r$subject_id, visit == r$visit)
+    f <- rates %>% filter(subject_id == r$subject_id, visit == r$visit)
     simulate_lagged_dose(bolus12, FINE_PLOT, cv$dose_12C_mg, f$f_delayed_12C, f$t_lag_12C)
   } else bolus12(FINE_PLOT, cv$dose_12C_mg)
   th <- unlist(r[c("F_13C6", "k_release", "f_delayed_13C6", "t_lag1_13C6", "f_delayed2_13C6", "t_lag2_13C6")])
@@ -139,7 +122,7 @@ for (sid in unique(res$subject_id)) {
     facet_grid(isotope ~ visit, scales = "free_y") +
     scale_color_manual(values = c("12C" = "steelblue", "13C6" = "firebrick")) +
     labs(title = sid, subtitle = "ka and kel from the 12C shared-kel fit, held fixed for 13C6", x = "Time (min)", y = "Concentration (mg/L)") +
-    theme_bw()
+    theme_Publication()
   ggsave(file.path(OUT_DIR, "plots_individual", sprintf("%s_13C6.pdf", sid)), p, width = 8, height = 5)
 }
 cat("Done:", file.path(OUT_DIR, "fits_13C6.csv"), "and plots_individual/\n")

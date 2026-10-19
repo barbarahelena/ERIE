@@ -1,14 +1,8 @@
 # =============================================================================
-# 08_plot_simulations.R - supplementary figure: independent fits vs one shared kel
-#
-# Reads the replicates written by 06_simulate_ka_kel_recovery.R (independent fits)
-# and 07_simulate_shared_kel.R (one kel per subject) and plots, per scenario:
-#   A  share of replicates where the paired Wilcoxon on ka gives p < 0.05 (95% Wilson CI)
-#   B  error in the fitted ka change: median fitted minus true log(ka intervention / ka baseline),
-#      median and 2.5-97.5 percentiles over replicates
-# No refitting: rerun 06 and 07 first when the fits change.
-# Output: results/03_diagnostics_ka_kel/simulation/simulation_figure.pdf (all scenarios) and
-#         simulation_figure_ka.pdf (no change and ka change only), each with a .png
+# 06_plot_simulations.R - supplementary figure from the replicates of 04 and 05 (no refitting)
+#   A  share of replicates with p < 0.05 on ka (95% Wilson CI)
+#   B  error in the fitted log ka change (median, 2.5-97.5 percentiles)
+# Output: results/02_diagnostics_ka_kel/simulation/simulation_figure.pdf and simulation_figure_ka.pdf
 # =============================================================================
 suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(ggplot2); library(grid); library(ggthemes); library(ggpubr) })
 
@@ -41,7 +35,7 @@ theme_Publication <- function(base_size=14, base_family="sans") {
         ))
 }
 
-SIM_DIR <- "results/03_diagnostics_ka_kel/simulation"
+SIM_DIR <- "results/02_diagnostics_ka_kel/simulation"
 FIT_COLORS <- c(independent = "#2a78d6", shared = "#eb6834")
 FIT_LABELS <- c(independent = "Each visit fitted alone", shared = "One kel per subject")
 FIT_SHAPES <- c(independent = 16, shared = 17)

@@ -1,37 +1,22 @@
 # =============================================================================
-# 06_simulate_ka_kel_recovery.R - can the pipeline tell a ka change from a kel change?
-#
-# Simulates the design of the study (same subjects' sampling times, Vd and
-# doses, both visits) from single_wave truth with known ka and kel, adds noise
-# at the level of the real fits, refits every curve exactly as
-# scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R does for single_wave (same
-# objective and penalties, the current kel bounds, fewer random seeds), and runs the paired
-# Wilcoxon on ka, kel, max(ka, kel) and min(ka, kel). Per scenario it reports:
-#   - rejection rate at p < 0.05 for each quantity (power if the quantity
-#     truly changed, false-positive rate if not)
-#   - bias of the fitted ka and kel, and how often the labels come out swapped
-#   - how often a fit lands on the ka = kel diagonal
-# Scenarios (true ka / kel at baseline, in 1/min; "up" = x1.5 at intervention):
-#   null_sep, ka_up_sep, kel_up_sep       0.040 / 0.025  well separated
-#   null_diag, ka_up_diag, kel_up_diag    0.025 / 0.025  on the diagonal
-#   ka_up_flip                            0.020 / 0.050  kel > ka
-# Limitation: truth has no second wave; real curves with two waves are harder.
-# Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/03_diagnostics_ka_kel/simulation/
+# 04_simulate_ka_kel_recovery.R - simulated study design, each visit fitted alone
+# Design, scenarios and results: docs/pk-model.md, "Why one kel per subject".
+# Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/02_diagnostics_ka_kel/simulation/
 # =============================================================================
 suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(purrr) })
 source("scripts/assets/pk_curves.R")
 source("scripts/assets/pk_fit.R")
 
-OUT_DIR <- "results/03_diagnostics_ka_kel/simulation"
+OUT_DIR <- "results/02_diagnostics_ka_kel/simulation"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 N_REPS  <- as.integer(Sys.getenv("ERIE_SIM_REPS", unset = "50"))
 N_CORES <- as.integer(Sys.getenv("ERIE_N_CORES", unset = max(1, parallel::detectCores() - 2)))
 SIM_SEED <- 11
 
-# Same settings as scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R
+# Fit settings of the independent fit
 MIN_TMAX <- 10; CMAX_TOL <- 0.10; CMAX_LAMBDA <- 20; TMAX_LAMBDA <- 50
 BOUNDS_INDEP <- list(ka = c(1e-4, 1), kel = log(2) / c(70, 7), F = c(1e-4, 1))
-N_RANDOM_INDEP <- 15   # the independent fit uses 40; fewer here to keep the simulation affordable
+N_RANDOM_INDEP <- 15   # 40 in the independent fit
 FINE_T <- seq(0, 400, length.out = 50)
 
 # ---- design: the real completers' sampling times, Vd and dose ---------------
@@ -43,11 +28,9 @@ design <- conc %>% filter(subject_id %in% completers) %>%
   group_by(subject_id, visit) %>% summarise(times = list(time_min), .groups = "drop") %>%
   left_join(cov %>% select(subject_id, visit, vd_L, dose_12C_mg), by = c("subject_id", "visit"))
 
-# Noise: additive, at the level of the real single-fit residuals (the objective is unweighted)
-# Taken from the better of each curve's single_wave and two_wave fit, so unmodelled second waves don't inflate it.
-rss_of <- function(f) read_csv(file.path("results/01_independent_fit", f), show_col_types = FALSE) %>% select(subject_id, visit, rss, n)
-real <- bind_rows(rss_of("fit_results_single_wave.csv"), rss_of("fit_results_two_wave.csv")) %>%
-  filter(!is.na(rss)) %>% group_by(subject_id, visit) %>% slice_min(rss, n = 1, with_ties = FALSE) %>% ungroup()
+# Additive noise at the level of the real fits (02_fit_shared_kel.R, both visits)
+real <- read_csv("results/01_shared_kel/shared_kel_fits.csv", show_col_types = FALSE) %>%
+  reframe(rss = c(rss_b, rss_i), n = c(n_b, n_i)) %>% filter(!is.na(rss))
 NOISE_SD <- median(sqrt(real$rss / real$n))
 cat("Residual SD of the real fits (median):", round(NOISE_SD, 2), "mg/L; completers:", length(completers), "\n")
 
@@ -107,7 +90,7 @@ run_rep <- function(sc, rep) {
     filter(is.finite(ka_baseline), is.finite(ka_intervention))
   tibble(scenario = sc$scenario, rep = rep,
          p_ka = pw("ka"), p_kel = pw("kel"), p_k_fast = pw("k_fast"), p_k_slow = pw("k_slow"),
-         # same definition as 07: median fitted log ka change minus the median true one
+         # same definition as 05: median fitted log ka change minus the median true one
          bias_ka_change = median(log(ka_w$ka_intervention / ka_w$ka_baseline)) - median(log(ka_w$ka_true_intervention / ka_w$ka_true_baseline)),
          bias_log_ka = median(log(fits$ka / fits$ka_true), na.rm = TRUE),
          bias_log_kel = median(log(fits$kel / fits$kel_true), na.rm = TRUE),

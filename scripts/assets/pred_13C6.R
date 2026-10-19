@@ -1,11 +1,8 @@
 # =============================================================================
-# pred_13C6.R - 13C6 tracer prediction with ka and kel fixed (ERIE-specific)
-#
-# Shared by 09_fit_13C6.R (fit and plots) and 10_diet_summary_13C6.R (curves
-# and metrics), so both draw exactly the curve that was fitted. Needs pk_curves.R.
+# pred_13C6.R - 13C6 prediction with ka and kel fixed, shared by 07 and 08. Needs pk_curves.R.
 # =============================================================================
 
-#' @param mech `release`, `onset_lag` or `second_wave` (see 09_fit_13C6.R).
+#' @param mech `release`, `onset_lag` or `second_wave` (see 07_fit_13C6.R).
 #' @param t Times (min).
 #' @param th Named 13C6 parameters: F_13C6 plus the ones the mechanism uses.
 #' @param r List or one-row data frame with `ka`, `kel`, `model_12C` and `t_lag_12C`.

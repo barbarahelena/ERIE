@@ -1,22 +1,13 @@
 # =============================================================================
-# 07_simulate_shared_kel.R - what a "kel is stable across visits" assumption costs
-#
-# Same design, scenarios, noise and single_wave truth as 06_simulate_ka_kel_recovery.R,
-# but each subject's two visits are fitted TOGETHER with one shared kel and a
-# separate ka and F per visit (5 parameters, same objective, penalties and
-# bounds as the independent fits). Reports, per scenario:
-#   - rejection rate of the paired Wilcoxon on ka (power when kel truly is
-#     stable, false-positive rate when kel truly changes or nothing changes)
-#   - how often the fitted ka/kel ordering is the wrong way round
-#   - bias in the fitted ka change (median log(ka_int/ka_base) vs truth)
-# Compare with simulation_summary.csv from 06 (independent fits).
-# Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/03_diagnostics_ka_kel/simulation/
+# 05_simulate_shared_kel.R - simulated study design as in 04, fitted with one kel per subject
+# Design, scenarios and results: docs/pk-model.md, "Why one kel per subject".
+# Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/02_diagnostics_ka_kel/simulation/
 # =============================================================================
 options(erie.sim.lib = TRUE)
-source("scripts/06_simulate_ka_kel_recovery.R")
+source("scripts/04_simulate_ka_kel_recovery.R")
 
 BOUNDS_SHARED <- list(kel = log(2) / c(70, 7), ka_b = c(1e-4, 1), ka_i = c(1e-4, 1), F_b = c(1e-4, 1), F_i = c(1e-4, 1))
-N_RANDOM_SHARED <- 25   # more than the 15 per curve in 06: 5 parameters instead of 3
+N_RANDOM_SHARED <- 25   # more than the 15 per curve in 04: 5 parameters instead of 3
 
 fit_shared <- function(times_b, y_b, times_i, y_i, dose_b, dose_i, Vd_b, Vd_i, seed) {
   set.seed(seed)
