@@ -1,11 +1,11 @@
 # =============================================================================
-# 04_simulate_ka_kel_recovery.R - simulated study design, each visit fitted alone
+# simulations/01_ka_kel_recovery.R - simulated study design, each visit fitted alone
 # Design, scenarios and results: docs/pk-model.md, "Why one kel per subject".
 # Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/02_diagnostics_ka_kel/simulation/
 # =============================================================================
 suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(purrr) })
-source("scripts/assets/pk_curves.R")
-source("scripts/assets/pk_fit.R")
+source("scripts/assets/pk_equations.R")
+source("scripts/assets/optimizer.R")   # also the penalty settings MIN_TMAX, CMAX_TOL, ... and FINE_T
 
 OUT_DIR <- "results/02_diagnostics_ka_kel/simulation"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
@@ -14,10 +14,8 @@ N_CORES <- as.integer(Sys.getenv("ERIE_N_CORES", unset = max(1, parallel::detect
 SIM_SEED <- 11
 
 # Fit settings of the independent fit
-MIN_TMAX <- 10; CMAX_TOL <- 0.10; CMAX_LAMBDA <- 20; TMAX_LAMBDA <- 50
 BOUNDS_INDEP <- list(ka = c(1e-4, 1), kel = log(2) / c(70, 7), F = c(1e-4, 1))
 N_RANDOM_INDEP <- 15   # 40 in the independent fit
-FINE_T <- seq(0, 400, length.out = 50)
 
 # ---- design: the real completers' sampling times, Vd and dose ---------------
 cov <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE) %>% filter(!is.na(bw_kg))
@@ -50,7 +48,7 @@ fit_curve <- function(times, y, dose, Vd, seed) {
   curve <- list(times = times, conc = y,
     simulate      = function(theta) bateman_conc(times, theta[["ka"]], theta[["kel"]], theta[["F"]], dose, Vd),
     fine_simulate = function(theta) list(time = FINE_T, conc = bateman_conc(FINE_T, theta[["ka"]], theta[["kel"]], theta[["F"]], dose, Vd)))
-  objective <- build_joint_objective(list(curve), min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL, cmax_lambda = CMAX_LAMBDA,
+  objective <- build_objective(list(curve), min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL, cmax_lambda = CMAX_LAMBDA,
                                      tmax_lambda = TMAX_LAMBDA, proportional_weighting = FALSE)
   seeds <- c(list(c(ka = 0.03, kel = 0.02, F = 0.3), c(ka = 0.08, kel = 0.05, F = 0.15),
                   c(ka = 0.01, kel = 0.01, F = 0.5), c(ka = 0.05, kel = 0.08, F = 0.2)),
@@ -90,7 +88,7 @@ run_rep <- function(sc, rep) {
     filter(is.finite(ka_baseline), is.finite(ka_intervention))
   tibble(scenario = sc$scenario, rep = rep,
          p_ka = pw("ka"), p_kel = pw("kel"), p_k_fast = pw("k_fast"), p_k_slow = pw("k_slow"),
-         # same definition as 05: median fitted log ka change minus the median true one
+         # same definition as 02: median fitted log ka change minus the median true one
          bias_ka_change = median(log(ka_w$ka_intervention / ka_w$ka_baseline)) - median(log(ka_w$ka_true_intervention / ka_w$ka_true_baseline)),
          bias_log_ka = median(log(fits$ka / fits$ka_true), na.rm = TRUE),
          bias_log_kel = median(log(fits$kel / fits$kel_true), na.rm = TRUE),

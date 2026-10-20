@@ -1,5 +1,5 @@
 # =============================================================================
-# theme_publication.R - house ggplot theme for the individual plots. Needs ggplot2, grid and ggthemes.
+# theme_publication.R - house ggplot theme for every figure. Needs ggplot2, grid and ggthemes.
 # =============================================================================
 theme_Publication <- function(base_size=14, base_family="sans") {
     suppressWarnings(theme_foundation(base_size=base_size, base_family=base_family)

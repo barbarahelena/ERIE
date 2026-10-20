@@ -1,20 +1,22 @@
 # =============================================================================
-# 05_simulate_shared_kel.R - simulated study design as in 04, fitted with one kel per subject
+# simulations/02_shared_kel.R - simulated study design as in 01, fitted with one kel per subject
+# Single-wave curves and a simplified shared-kel fit (fit_shared_single_wave() below, not model_12C.R);
+# simulations/04_structure_selection.R tests the full procedure of 02_fit_shared_kel.R.
 # Design, scenarios and results: docs/pk-model.md, "Why one kel per subject".
 # Env: ERIE_SIM_REPS (default 50), ERIE_N_CORES. Output: results/02_diagnostics_ka_kel/simulation/
 # =============================================================================
 options(erie.sim.lib = TRUE)
-source("scripts/04_simulate_ka_kel_recovery.R")
+source("scripts/simulations/01_ka_kel_recovery.R")
 
 BOUNDS_SHARED <- list(kel = log(2) / c(70, 7), ka_b = c(1e-4, 1), ka_i = c(1e-4, 1), F_b = c(1e-4, 1), F_i = c(1e-4, 1))
-N_RANDOM_SHARED <- 25   # more than the 15 per curve in 04: 5 parameters instead of 3
+N_RANDOM_SHARED <- 25   # more than the 15 per curve in 01: 5 parameters instead of 3
 
-fit_shared <- function(times_b, y_b, times_i, y_i, dose_b, dose_i, Vd_b, Vd_i, seed) {
+fit_shared_single_wave <- function(times_b, y_b, times_i, y_i, dose_b, dose_i, Vd_b, Vd_i, seed) {
   set.seed(seed)
   mk <- function(times, y, ka_name, F_name, dose, Vd) list(times = times, conc = y,
     simulate      = function(th) bateman_conc(times, th[[ka_name]], th[["kel"]], th[[F_name]], dose, Vd),
     fine_simulate = function(th) list(time = FINE_T, conc = bateman_conc(FINE_T, th[[ka_name]], th[["kel"]], th[[F_name]], dose, Vd)))
-  objective <- build_joint_objective(list(mk(times_b, y_b, "ka_b", "F_b", dose_b, Vd_b), mk(times_i, y_i, "ka_i", "F_i", dose_i, Vd_i)),
+  objective <- build_objective(list(mk(times_b, y_b, "ka_b", "F_b", dose_b, Vd_b), mk(times_i, y_i, "ka_i", "F_i", dose_i, Vd_i)),
                                      min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL, cmax_lambda = CMAX_LAMBDA,
                                      tmax_lambda = TMAX_LAMBDA, proportional_weighting = FALSE)
   sd <- function(kel, ka_b, ka_i, F = 0.1) c(kel = kel, ka_b = ka_b, ka_i = ka_i, F_b = F, F_i = F)
@@ -46,7 +48,7 @@ run_rep_shared <- function(sc, rep) {
            y = bateman_conc(times, ka_t, kel_t, F_t, dd$dose_12C_mg, dd$vd_L) + rnorm(length(times), 0, NOISE_SD))
     }
     b <- one("baseline"); i <- one("intervention")
-    f <- fit_shared(b$times, b$y, i$times, i$y, b$dose, i$dose, b$Vd, i$Vd, seed = sample.int(1e6, 1))
+    f <- fit_shared_single_wave(b$times, b$y, i$times, i$y, b$dose, i$dose, b$Vd, i$Vd, seed = sample.int(1e6, 1))
     tibble(subject_id = sid, kel = f[["kel"]], ka_b = f[["ka_b"]], ka_i = f[["ka_i"]],
            ka_b_true = b$ka, ka_i_true = i$ka, kel_b_true = b$kel)
   })

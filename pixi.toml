@@ -9,11 +9,13 @@ version = "0.1.0"
 01-clean-data = "Rscript scripts/01_clean_data.R"
 02-fit-shared-kel = "Rscript scripts/02_fit_shared_kel.R"
 03-diet-summary-shared-kel = { cmd = "Rscript scripts/03_diet_summary_shared_kel.R", depends-on = ["02-fit-shared-kel"] }
-04-simulate-ka-kel = { cmd = "Rscript scripts/04_simulate_ka_kel_recovery.R", depends-on = ["02-fit-shared-kel"] }
-05-simulate-shared-kel = { cmd = "Rscript scripts/05_simulate_shared_kel.R", depends-on = ["02-fit-shared-kel"] }
-06-plot-simulations = "Rscript scripts/06_plot_simulations.R"
-07-fit-13C6 = { cmd = "Rscript scripts/07_fit_13C6.R", depends-on = ["02-fit-shared-kel"] }
-08-diet-summary-13C6 = { cmd = "Rscript scripts/08_diet_summary_13C6.R", depends-on = ["07-fit-13C6"] }
+sim-01-ka-kel-recovery = { cmd = "Rscript scripts/simulations/01_ka_kel_recovery.R", depends-on = ["02-fit-shared-kel"] }
+sim-02-shared-kel = { cmd = "Rscript scripts/simulations/02_shared_kel.R", depends-on = ["02-fit-shared-kel"] }
+sim-03-plot = "Rscript scripts/simulations/03_plot.R"
+sim-04-structure-selection = { cmd = "Rscript scripts/simulations/04_structure_selection.R", depends-on = ["02-fit-shared-kel"] }
+sim-05-plot-structure-examples = { cmd = "Rscript scripts/simulations/05_plot_structure_examples.R", depends-on = ["02-fit-shared-kel"] }
+04-fit-13C6 = { cmd = "Rscript scripts/04_fit_13C6.R", depends-on = ["02-fit-shared-kel"] }
+05-diet-summary-13C6 = { cmd = "Rscript scripts/05_diet_summary_13C6.R", depends-on = ["04-fit-13C6"] }
 pipeline = { depends-on = ["01-clean-data", "03-diet-summary-shared-kel"] }
 test-engine = "Rscript scripts/assets/tests.R"
 

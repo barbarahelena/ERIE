@@ -1,23 +1,14 @@
 # =============================================================================
-# 07_fit_13C6.R - 13C6 fitted with ka and kel fixed at the 12C shared-kel fit
-# Mechanisms, bounds and selection: docs/pk-model.md, "The 13C6 tracer with fixed rates".
+# 04_fit_13C6.R - 13C6 fitted with ka and kel fixed at the 12C shared-kel fit
+# The model (mechanisms, bounds, selection) is in assets/model_13C6.R; docs/pk-model.md, "The 13C6 tracer with fixed rates".
 # Output (results/03_13C6_fixed_rates/): fits_13C6.csv, plots_individual/
 # =============================================================================
 suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(purrr); library(ggplot2); library(grid); library(ggthemes) })
-source("scripts/assets/pk_curves.R")
-source("scripts/assets/pk_fit.R")
+source("scripts/assets/model_13C6.R")   # pred_13C6() and fit_13C6()
 source("scripts/assets/theme_publication.R")
-source("scripts/assets/pk_diagnostics.R")
-source("scripts/assets/pred_13C6.R")   # pred_13C6(): the prediction per mechanism
 
 OUT_DIR <- "results/03_13C6_fixed_rates"; dir.create(file.path(OUT_DIR, "plots_individual"), showWarnings = FALSE, recursive = TRUE)
 N_CORES <- as.integer(Sys.getenv("ERIE_N_CORES", unset = 1))
-MIN_TMAX <- 10; CMAX_TOL <- 0.10; CMAX_LAMBDA <- 20; TMAX_LAMBDA <- 50
-BOUNDS_RELEASE <- list(F_13C6 = c(1e-4, 1), k_release = c(0.001, 1), f_delayed_13C6 = c(0.001, 0.999))
-BOUNDS_ONSET   <- list(F_13C6 = c(1e-4, 1), t_lag1_13C6 = c(0, 90))
-BOUNDS_WAVE    <- list(F_13C6 = c(1e-4, 1), f_delayed2_13C6 = c(0.05, 0.95), t_lag2_13C6 = c(30, 150))
-N_RANDOM <- 20
-FINE_T <- seq(0, 400, length.out = 50)
 
 cov   <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE)
 const <- read_csv("data/processed/erie_constants.csv", show_col_types = FALSE)
@@ -39,54 +30,20 @@ rates <- bind_rows(
 
 fit_curve_13C6 <- function(i) {
   r <- rates[i, ]; sid <- r$subject_id; vis <- r$visit
-  set.seed(string_seed(paste(sid, vis, "13C6")))
   o <- conc13 %>% filter(subject_id == sid, visit == vis) %>% arrange(time_min)
   cv <- cov %>% filter(subject_id == sid, visit == vis)
-  dose <- cv$dose_13C6_mg; Vd <- cv$vd_L; n <- nrow(o)
-  if (n < 3) return(tibble(subject_id = sid, visit = vis))
-
-  run <- function(mech, bounds, seeds) {
-    curve <- list(times = o$time_min, conc = o$conc_mgL,
-                  simulate = function(th) pred_13C6(mech, o$time_min, th, r, dose, Vd),
-                  fine_simulate = function(th) list(time = FINE_T, conc = pred_13C6(mech, FINE_T, th, r, dose, Vd)))
-    objective <- build_joint_objective(list(curve), min_tmax = MIN_TMAX, cmax_tol = CMAX_TOL, cmax_lambda = CMAX_LAMBDA,
-                                       tmax_lambda = TMAX_LAMBDA, proportional_weighting = FALSE)
-    fit <- fit_multistart(objective, vapply(bounds, `[`, numeric(1), 1), vapply(bounds, `[`, numeric(1), 2),
-                          seeds = seeds, control = list(maxit = 60))
-    if (is.null(fit)) return(NULL)
-    rss <- sum((o$conc_mgL - curve$simulate(fit$par))^2)
-    list(mech = mech, par = fit$par, rss = rss, aic = n * log(rss / n) + 2 * length(bounds), converged = fit$convergence == 0)
-  }
-
-  F0 <- r$F_12C
-  two_wave <- r$model_12C == "two_wave"
-  b_rel <- if (two_wave) BOUNDS_RELEASE else BOUNDS_RELEASE[c("F_13C6", "k_release")]
-  seeds_rel <- c(
-    unlist(lapply(c(0.01, 0.03, 0.1, 0.3), function(k) lapply(c(F0, 0.02), function(f)
-      c(F_13C6 = f, k_release = k, f_delayed_13C6 = 0.3)[names(b_rel)])), recursive = FALSE),
-    if (two_wave) list(c(F_13C6 = F0, k_release = 0.05, f_delayed_13C6 = 0.01), c(F_13C6 = F0, k_release = 0.05, f_delayed_13C6 = 0.99)),
-    random_seeds(N_RANDOM, b_rel, log_scale = "k_release"))
-  cands <- list(release = run("release", b_rel, seeds_rel))
-  if (has_onset_lag_evidence(o$time_min, o$conc_mgL))
-    cands$onset_lag <- run("onset_lag", BOUNDS_ONSET, lapply(c(10, 20, 30, 40, 50), function(tl) c(F_13C6 = F0, t_lag1_13C6 = tl)))
-  if (has_peak_dip_rise(o$time_min, o$conc_mgL) || has_near_peak_neighbor(o$time_min, o$conc_mgL)) {
-    sw <- run("second_wave", BOUNDS_WAVE, lapply(c(40, 60, 90, 120), function(tl) c(F_13C6 = F0, f_delayed2_13C6 = 0.5, t_lag2_13C6 = tl)))
-    # pinned at the lower bound of f_delayed2_13C6 means no real second wave
-    if (!is.null(sw) && sw$par[["f_delayed2_13C6"]] > BOUNDS_WAVE$f_delayed2_13C6[1] + 1e-3) cands$second_wave <- sw
-  }
-  cands <- compact(cands)
-  if (length(cands) == 0) return(tibble(subject_id = sid, visit = vis))
-  best <- cands[[which.min(map_dbl(cands, "aic"))]]
-  p <- function(nm) if (nm %in% names(best$par)) best$par[[nm]] else NA_real_
-  aic_of <- function(m) if (m %in% names(cands)) cands[[m]]$aic else NA_real_
+  f <- fit_13C6(paste(sid, vis, "13C6"), o$time_min, o$conc_mgL, r, cv$dose_13C6_mg, cv$vd_L)
+  if (is.null(f)) return(tibble(subject_id = sid, visit = vis))
+  best <- f$best
+  aic_mech <- function(m) if (m %in% names(f$cands)) f$cands[[m]]$aic else NA_real_
 
   tibble(subject_id = sid, visit = vis, model_12C = r$model_12C, ka = r$ka, kel = r$kel, t_lag_12C = r$t_lag_12C,
          F_12C = r$F_12C, r2_12C = r$r2_12C, mechanism_13C6 = best$mech,
-         F_13C6 = p("F_13C6"), k_release = p("k_release"), f_delayed_13C6 = p("f_delayed_13C6"), t_lag1_13C6 = p("t_lag1_13C6"),
-         f_delayed2_13C6 = p("f_delayed2_13C6"), t_lag2_13C6 = p("t_lag2_13C6"),
-         r2_13C6 = 1 - best$rss / sum((o$conc_mgL - mean(o$conc_mgL))^2), rss_13C6 = best$rss, n_13C6 = n,
-         k_release_at_bound = isTRUE(p("k_release") > BOUNDS_RELEASE$k_release[2] - 1e-4), converged = best$converged,
-         aic_release = aic_of("release"), aic_onset_lag = aic_of("onset_lag"), aic_second_wave = aic_of("second_wave"))
+         F_13C6 = par_or_na(best, "F_13C6"), k_release = par_or_na(best, "k_release"), f_delayed_13C6 = par_or_na(best, "f_delayed_13C6"),
+         t_lag1_13C6 = par_or_na(best, "t_lag1_13C6"), f_delayed2_13C6 = par_or_na(best, "f_delayed2_13C6"),
+         t_lag2_13C6 = par_or_na(best, "t_lag2_13C6"), r2_13C6 = best$r2, rss_13C6 = best$rss, n_13C6 = nrow(o),
+         k_release_at_bound = isTRUE(par_or_na(best, "k_release") > BOUNDS_RELEASE$k_release[2] - 1e-4), converged = best$converged,
+         aic_release = aic_mech("release"), aic_onset_lag = aic_mech("onset_lag"), aic_second_wave = aic_mech("second_wave"))
 }
 
 res <- bind_rows(parallel::mclapply(seq_len(nrow(rates)), fit_curve_13C6, mc.cores = N_CORES)) %>%

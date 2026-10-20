@@ -1,7 +1,7 @@
 # =============================================================================
-# pk_stats.R - paired-visit statistics for per-subject PK summaries
+# stats.R - paired-visit statistics for per-subject PK summaries
 #
-# Generic: knows subjects, two visits and two groups, nothing about fructose.
+# Works on subjects, two visits and two groups.
 # =============================================================================
 
 #' Random-intercept mixed model for a visit effect within and between groups
