@@ -1,12 +1,12 @@
 # =============================================================================
-# pk_fit.R
+# optimizer.R
 #
-# Generic optimization engine for fitting PK models to observed concentration
-# curves - single-curve or jointly across several curves that share some
-# parameters and not others. Nothing here is study-specific: it operates on
-# plain "curve" lists (see `build_joint_objective()`) and named parameter
-# vectors. Reuse this file as-is in other projects; the analysis script
-# supplies the model-specific `simulate` closures, bounds, and doses.
+# Optimization engine for fitting PK models to observed concentration curves -
+# single-curve or jointly across several curves that share some parameters and
+# not others. It operates on plain "curve" lists (see `build_objective()`)
+# and named parameter vectors; model_12C.R and model_13C6.R supply the
+# `simulate` closures, bounds, and doses. Also holds the penalty settings every
+# fit uses and the fit-quality helpers (R², AIC).
 #
 # WHY MULTI-START: first-order PK objective surfaces are routinely
 # multimodal (e.g. a fast-absorption/fast-clearance solution can fit nearly
@@ -22,6 +22,31 @@
 # set.seed(string_seed(<task's own stable ID>)) inside the worker, so a task's
 # draws depend only on its ID, not on core count, task order or other tasks.
 # =============================================================================
+
+# Penalty settings of every fit (see build_objective()): the Tmax floor (min), the Cmax band (fraction), their
+# weights, and the fine time grid the penalties are evaluated on (min). See "Fitting procedure" in docs/pk-model.md.
+MIN_TMAX <- 10; CMAX_TOL <- 0.10; CMAX_LAMBDA <- 20; TMAX_LAMBDA <- 50
+FINE_T <- seq(0, 400, length.out = 50)
+
+#' Coefficient of determination (R^2) between observed and predicted values
+#'
+#' @param observed,predicted Numeric vectors of equal length.
+#' @return Scalar R^2. Can be negative if `predicted` fits worse than the
+#'   mean of `observed`.
+r_squared <- function(observed, predicted) {
+  1 - sum((observed - predicted)^2) / sum((observed - mean(observed))^2)
+}
+
+#' AIC from residual sums of squares, with a residual variance per curve
+#'
+#' @param rss,n Residual sum of squares and number of points, one per curve.
+#' @param k Number of fitted parameters.
+aic_rss <- function(rss, n, k) sum(n * log(rss / n)) + 2 * k
+
+#' A fitted parameter, or NA when the fit is NULL or has no such parameter
+#'
+#' @param fit A list with `par` (a named numeric vector), or NULL.
+par_or_na <- function(fit, name) if (is.null(fit) || !(name %in% names(fit$par))) NA_real_ else fit$par[[name]]
 
 #' Deterministic integer seed from a string, for reproducible per-task
 #' set.seed() calls inside a parallel loop (see note above)
@@ -96,7 +121,7 @@ string_seed <- function(key) {
 #'   peak/early shape (e.g. a sharp early spike a sparse tail can't pin down).
 #'   See "Fitting procedure" in docs/pk-model.md for why the ERIE fits use FALSE.
 #' @return A function(theta) -> scalar objective value to minimize.
-build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20,
+build_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax_lambda = 20,
                                    tmax_lambda = 50, weight_floor_frac = 0.01,
                                    proportional_weighting = TRUE) {
   function(theta) {
@@ -141,11 +166,11 @@ build_joint_objective <- function(curves, min_tmax = NULL, cmax_tol = NULL, cmax
 #'
 #' Runs `optim(method = "L-BFGS-B")` from every seed in `seeds` and returns
 #' the best (lowest-objective) result. Failed starts (errors, or objective
-#' values at the escape-value ceiling used by [build_joint_objective()]) are
+#' values at the escape-value ceiling used by [build_objective()]) are
 #' silently skipped rather than aborting the whole fit.
 #'
 #' @param objective_fn function(theta) -> scalar, e.g. from
-#'   [build_joint_objective()].
+#'   [build_objective()].
 #' @param lower,upper Named numeric bound vectors.
 #' @param seeds List of named numeric starting vectors (same names/order as
 #'   `lower`/`upper`).
@@ -218,117 +243,6 @@ retry_seeds_near_bounds <- function(prior_par, bounds, flagged_params,
   c(list(prior_par), grid, random_seeds(n_random, bounds, log_scale = log_scale))
 }
 
-#' Adaptive retry pass: densely re-search any still-flagged fit, keep only
-#' if strictly better
-#'
-#' Generic driver for the failure mode `retry_seeds_near_bounds()` targets -
-#' a fit stuck in a worse local optimum than one the standard search should
-#' have found (see a calling project's own docs for the specific incident
-#' that motivated this). A boundary flag is only ONE symptom of that
-#' failure, and an unreliable one: it only shows up when the worse local
-#' optimum happens to sit exactly on a bound. A fit stuck in a worse local
-#' optimum that lands comfortably *inside* the bounds looks unremarkable -
-#' no boundary flag - but is just as wrong, and typically shows up instead
-#' as a poor fit (low R^2) or a search that didn't converge - hence
-#' `extra_flag_cols`/`convergence_col` below, not boundary flags only.
-#'
-#' Retries every row flagged by any of `bound_cols`, `extra_flag_cols`, or
-#' `convergence_col`, and replaces that row only if the retry's
-#' `objective_value` is strictly lower - so this can only improve `results`,
-#' never make it worse, however many rows are retried. A caller supplying
-#' only `bound_cols` still works (boundary-only retry), but should also
-#' pass its poor-fit/non-convergence columns where it has them, for the
-#' reason above.
-#'
-#' @param results A data frame with one row per fit, including an
-#'   `objective_value` column, the parameter columns named in `par_cols`,
-#'   and every column named in `bound_cols`/`extra_flag_cols`/`convergence_col`.
-#' @param bound_cols Named character vector: each name is one of `results`'
-#'   boundary-flag columns, each value the parameter name (matching
-#'   `bounds`/`par_cols`) that column is about - e.g.
-#'   `c(kel_at_bound = "kel", k_release_at_bound = "k_release")`. Triggers a
-#'   retry AND decides which parameter(s) get a targeted grid for it.
-#' @param extra_flag_cols Character vector of other `results` columns that
-#'   should also trigger a retry when TRUE (e.g. `"r2_12C_low"`), without
-#'   implying any particular parameter to grid over - a row retried only for
-#'   one of these gets the prior estimate plus random seeds, no grid.
-#' @param convergence_col A single `results` column name that should also
-#'   trigger a retry when FALSE (e.g. `"converged"`), or NULL to skip this.
-#' @param bounds Named list, one `c(lower, upper)` per fitted parameter.
-#' @param par_cols Character vector naming which `results` columns hold the
-#'   fitted parameter values (same names as `bounds`).
-#' @param refit_fn `function(i, seeds, maxit)` - refit just row `i` of
-#'   `results` with the given retry `seeds` and `maxit`, and return a
-#'   one-row data frame shaped like a row of `results`. This is the
-#'   caller's own per-item fitting function (e.g. a project's
-#'   `fit_subject_visit()`), so this stays a driver, not a second,
-#'   separately-maintained fitting implementation.
-#' @param maxit_retry `maxit` passed to `refit_fn` for the retry.
-#' @param log_scale Passed through to `retry_seeds_near_bounds()`.
-#' @param mc.cores Cores to retry flagged rows across
-#'   (`parallel::mclapply()`); default 1 (sequential, works everywhere).
-#'   This pass's own random retry seeds are reproducible across `mc.cores`
-#'   and task-scheduling order (each row reseeds from `string_seed()` on its
-#'   own row index before drawing them - see the note in `retry_one()` inside
-#'   this function), the same reproducibility `string_seed()`'s own docs
-#'   describe for a calling project's per-task seeding.
-#' @param verbose Print a one-line progress/outcome summary.
-#' @return `results`, with any strictly-improved rows replaced, plus two new
-#'   columns: `retried` (TRUE for every row this pass attempted) and
-#'   `retry_improved` (TRUE if the retry replaced the row, FALSE if it was
-#'   attempted but didn't beat the original, NA if never retried). A row
-#'   that was retried but not improved is informative on its own - it's
-#'   evidence the original result wasn't an under-searched local optimum,
-#'   e.g. a weak/low-information curve (rather than a search
-#'   failure) is expected to stay flagged even after a denser retry.
-adaptive_retry <- function(results, bound_cols, bounds, par_cols, refit_fn,
-                            extra_flag_cols = character(0), convergence_col = NULL,
-                            maxit_retry = 60, log_scale = character(0),
-                            mc.cores = 1, verbose = TRUE) {
-  results$retried <- FALSE
-  results$retry_improved <- NA
-
-  flag_cols <- c(names(bound_cols), extra_flag_cols)
-  is_flagged <- if (length(flag_cols)) Reduce(`|`, lapply(flag_cols, function(col) results[[col]] %in% TRUE)) else FALSE
-  not_converged <- if (!is.null(convergence_col)) results[[convergence_col]] %in% FALSE else FALSE
-  retry_mask <- is_flagged | not_converged
-
-  flagged <- which(retry_mask)
-  if (length(flagged) == 0) return(results)
-  if (verbose) cat("\nRetrying", length(flagged), "flagged fit(s) (boundary and/or poor fit) with a denser search...\n")
-
-  retry_one <- function(i) {
-    # Seeded here, before retry_seeds_near_bounds()'s own random_seeds() call,
-    # not left to refit_fn(): row index i is a stable, order-independent key
-    # (results is built in a fixed subject/visit order), so this makes the
-    # retry pass's own random seeds reproducible regardless of mc.cores or
-    # task scheduling - the same reasoning as fit_one()'s per-task seeding in
-    # the calling project, extended to cover this driver's own randomness too.
-    set.seed(string_seed(paste("adaptive_retry_row", i)))
-    prior_par <- stats::setNames(as.numeric(results[i, par_cols]), par_cols)
-    flagged_params <- unname(bound_cols[vapply(names(bound_cols), function(col) isTRUE(results[[col]][i]), logical(1))])
-    seeds <- retry_seeds_near_bounds(prior_par, bounds, flagged_params, log_scale = log_scale)
-    refit_fn(i, seeds, maxit_retry)
-  }
-  retry_results <- parallel::mclapply(flagged, retry_one, mc.cores = mc.cores)
-
-  n_improved <- 0
-  for (j in seq_along(flagged)) {
-    i <- flagged[j]; new_row <- retry_results[[j]]
-    results$retried[i] <- TRUE
-    improved <- !is.na(new_row$objective_value) && new_row$objective_value < results$objective_value[i]
-    results$retry_improved[i] <- improved
-    # new_row only carries the fit columns (ka, kel, ..., objective_value),
-    # not retried/retry_improved, so this can't clobber what was just set above.
-    if (improved) {
-      results[i, names(new_row)] <- new_row
-      n_improved <- n_improved + 1
-    }
-  }
-  if (verbose) cat("Retry improved", n_improved, "of", length(flagged), "flagged fit(s).\n")
-  results
-}
-
 #' Generate random starting seeds, optionally log-uniform per parameter
 #'
 #' Rate constants are usually better sampled log-uniformly (equal weight per
@@ -348,21 +262,4 @@ random_seeds <- function(n, bounds, log_scale = character(0)) {
       if (p %in% log_scale) exp(stats::runif(1, log(lo), log(hi))) else stats::runif(1, lo, hi)
     }, numeric(1)), param_names)
   }, simplify = FALSE)
-}
-
-#' Generate systematic grid seeds, crossed over a subset of parameters
-#'
-#' The remaining parameters (not in `grid`) are held fixed at the values
-#' given in `fixed`. Useful for densely covering a region of concern (e.g.
-#' near a bound that a previous fit got stuck at) without the combinatorial
-#' blow-up of gridding every parameter.
-#'
-#' @param grid Named list, one numeric vector of grid values per parameter.
-#' @param fixed Named list of fixed values for the other parameters.
-#' @return A list of named numeric vectors, one per grid combination.
-grid_seeds <- function(grid, fixed = list()) {
-  combos <- expand.grid(grid, KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
-  lapply(seq_len(nrow(combos)), function(i) {
-    unlist(c(as.list(combos[i, , drop = FALSE]), fixed))
-  })
 }

@@ -1,15 +1,7 @@
-# Diet-arm summary plots - fructose fit with one kel per subject
+# Diet-arm summary plots - 12C fit with one kel per subject (02_fit_shared_kel.R)
 # Barbara Verhaar
 #
-# Counterpart to scripts/archive/fructose_independent/03_diet_summary_fructose_independent.R for the shared-kel fit
-# (02_fit_shared_kel.R): same statistics and plot choices.
-# Every result is CONDITIONAL on a stable kel between a subject's two visits: the
-# fit forces any kel change into ka and F (docs/archive/ka-kel-identifiability.md), so each
-# plot carries a caption saying so. kel is an assumption with one value
-# per subject and no estimate per visit, so it is left out of every table, test and boxplot here; it
-# still enters the simulated curves and AUC. Mechanism (single_wave/two_wave) and the two_wave
-# f_delayed and t_lag come from the independent fit, where the shared fit holds
-# them fixed.
+# kel is assumed equal at both visits and is not tested. See docs/pk-model.md, "Output files".
 
 # Libraries
 suppressMessages({
@@ -25,39 +17,9 @@ suppressMessages({
 })
 
 # Get functions
-source("scripts/assets/pk_curves.R")
-source("scripts/assets/pk_stats.R")
-
-# Theme
-theme_Publication <- function(base_size=14, base_family="sans") {
-    suppressWarnings(theme_foundation(base_size=base_size, base_family=base_family)
-        + theme(plot.title = element_text(face = "bold",
-                                          size = rel(1.0), hjust = 0.5),
-                plot.subtitle = element_text(size = rel(0.6), hjust = 0.5),
-                text = element_text(),
-                panel.background = element_rect(colour = NA, fill = NA),
-                plot.background = element_rect(colour = NA, fill = NA),
-                panel.border = element_rect(colour = NA),
-                axis.title = element_text(face = "bold",size = rel(0.8)),
-                axis.title.y = element_text(angle=90, vjust =2),
-                axis.title.x = element_text(vjust = -0.2),
-                axis.text = element_text(size = rel(0.7)),
-                axis.text.x = element_text(angle = 0),
-                axis.line = element_line(colour="black"),
-                axis.ticks = element_line(),
-                panel.grid.major = element_line(colour="#f0f0f0"),
-                panel.grid.minor = element_blank(),
-                legend.key = element_rect(colour = NA),
-                legend.position = "bottom",
-                legend.key.size= unit(0.2, "cm"),
-                legend.spacing  = unit(0, "cm"),
-                plot.margin=unit(c(10,5,5,5),"mm"),
-                strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
-                strip.text = element_text(face="bold"),
-                plot.caption = element_text(size = rel(0.5), face = "italic")
-        ))
-
-}
+source("scripts/assets/pk_equations.R")
+source("scripts/assets/stats.R")
+source("scripts/assets/theme_publication.R")
 
 # Plot labels: readable names and consistent colors.
 VISIT_LABELS <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
@@ -65,30 +27,24 @@ DIET_LABELS  <- c(low_fructose = "Low fructose diet", high_fructose = "High fruc
 DIET_COLORS  <- c(low_fructose = "#1b9e77", high_fructose = "#d95f02")
 VISIT_COLORS <- c(baseline = "#4477AA", intervention = "#CC6677")
 FINE_T_DIET <- seq(0, 400, by = 2)
-# Inclusion cutoff for this script's plots/statistics - separate from, and
-# stricter than, the R2_RELIABLE_MIN of the fitting scripts.
+# Inclusion cutoff for the plots and statistics
 R2_INCLUDE_MIN <- 0.7
 
-# Open data: the shared-kel fits (one row per subject) reshaped to one row per
-# subject x visit, plus the mechanism the independent fit selected for each visit.
-shared <- read_csv("results/02_shared_kel/shared_kel_fits.csv", show_col_types = FALSE)
-indep  <- read_csv("results/01_independent_fit/fit_results.csv", show_col_types = FALSE) %>%
-  select(subject_id, visit, model, f_delayed, t_lag)
+# Shared-kel fits, one row per subject x visit
+shared <- read_csv("results/01_shared_kel/shared_kel_fits.csv", show_col_types = FALSE)
 results <- bind_rows(
-  shared %>% transmute(subject_id, visit = "baseline",     ka = ka_b, kel = kel_shared, F = F_b, r2 = r2_b, kel_at_bound),
-  shared %>% transmute(subject_id, visit = "intervention", ka = ka_i, kel = kel_shared, F = F_i, r2 = r2_i, kel_at_bound)
-) %>% left_join(indep, by = c("subject_id", "visit"))
+  shared %>% transmute(subject_id, visit = "baseline",     model = model_b, ka = ka_b, kel = kel_shared, F = F_b,
+                       f_delayed = f_delayed_b, t_lag = t_lag_b, r2 = r2_b, kel_at_bound),
+  shared %>% transmute(subject_id, visit = "intervention", model = model_i, ka = ka_i, kel = kel_shared, F = F_i,
+                       f_delayed = f_delayed_i, t_lag = t_lag_i, r2 = r2_i, kel_at_bound)
+)
 CAPTION <- "Fit with one kel per subject: conditional on a stable kel between visits"
 covariates <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE)
 
-# All of this script's own outputs go in
-# one subfolder of results/02_shared_kel/.
-OUT_DIR <- "results/02_shared_kel/diet_summary"
+OUT_DIR <- "results/01_shared_kel/diet_summary"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
-# Subjects who completed both visits (a body weight at each). ER33 and ER34 were
-# lost to follow-up after baseline: they stay in the per-subject CSVs, flagged
-# `completed = FALSE`, and are left out of every plot and statistic.
+# Completers: a body weight at both visits
 completers <- covariates %>% filter(!is.na(bw_kg)) %>% count(subject_id) %>% filter(n == 2) %>% pull(subject_id)
 
 fits <- results %>%
@@ -101,28 +57,23 @@ fits <- fits %>%
     Vd = vd_L,
     completed = subject_id %in% completers,
     dose_mg = 1000 * bw_kg,
-    # Reliable = the fit isn't stuck at its kel bound and its R2 clears
-    # R2_INCLUDE_MIN. `converged` is not required.
+    # Reliable: kel away from its bounds and R2 >= R2_INCLUDE_MIN
     reliable = !kel_at_bound & r2 >= R2_INCLUDE_MIN
   )
 
 reliable_fits <- fits %>% filter(reliable)
-# What the plots and statistics use: completers with a reliable fit at BOTH visits,
-# so every summarised subject contributes a baseline/intervention pair.
+# Completers with a reliable fit at both visits
 paired_ids   <- reliable_fits %>% filter(completed) %>% count(subject_id) %>% filter(n == 2) %>% pull(subject_id)
 summary_fits <- reliable_fits #%>% filter(subject_id %in% paired_ids)
 
 # ---- Volume of distribution (Vd) by diet arm -------------------------------
-# Vd is the measured ECW, not a fit result, so it isn't gated on `reliable`.
-# Split by visit (dodged, matching the R2 plot below) as a covariate-balance check.
+# Vd is measured, so it is not gated on `reliable`
 
 vd_data <- fits %>% filter(completed) %>% distinct(subject_id, diet, visit, sex, Vd)
 
 p_vd <- ggplot(vd_data, aes(diet, Vd, fill = visit)) +
   geom_boxplot(outlier.shape = NA, alpha = 0.7, width = 0.5, position = position_dodge(width = 0.6)) +
-  # group = visit, not the default (fill x shape): without it, adding shape=sex here
-  # splits the dodge into 4 slots (visit x sex) instead of matching the boxplot's 2
-  # (visit), and points land outside their own box.
+  # group = visit keeps two dodge slots when shape = sex
   geom_jitter(aes(shape = sex, group = visit), position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.6),
               size = 1.8, alpha = 0.8, color = "black") +
   scale_x_discrete(labels = DIET_LABELS) +
@@ -136,7 +87,7 @@ cat("\nSaved", file.path(OUT_DIR, "diet_vd_boxplot.pdf"), "\n")
 
 # ---- Fit quality (R2) ------------------------------------------------------
 # Not gated on `reliable` (which filters on r2 itself): a whole-cohort QC view.
-R2_RELIABLE_MIN <- 0.70   # matches the independent fit's own threshold
+R2_RELIABLE_MIN <- 0.70   # same as R2_INCLUDE_MIN
 
 r2_data <- fits %>% filter(completed, !is.na(r2)) %>% transmute(subject_id, diet, visit, r2)
 
@@ -185,10 +136,7 @@ box_data <- bind_rows(
   summary_fits %>% transmute(subject_id, diet, visit, parameter = "F", value = F)
 )
 
-# Paired Wilcoxon signed-rank test, baseline vs intervention within each diet
-# arm (subjects with both visits reliable; needs >= 3 pairs). Signed differences
-# are on the log scale (fold-change), matching the curve-derived metrics test
-# further down.
+# Paired Wilcoxon on the log ratio within each diet arm (>= 3 pairs)
 param_deltas <- box_data %>%
   pivot_wider(names_from = visit, values_from = value) %>%
   filter(!is.na(baseline), !is.na(intervention)) %>%
@@ -206,8 +154,7 @@ write_csv(param_wilcoxon, file.path(OUT_DIR, "diet_parameter_wilcoxon.csv"))
 cat("\n=== Paired Wilcoxon, intervention vs baseline within each arm (fitted parameters) ===\n")
 print(as.data.frame(param_wilcoxon %>% select(-label)), digits = 3)
 
-# Random-intercept mixed model per parameter (log scale), shown next to the Wilcoxon:
-# the within-arm change and the diet x visit interaction (difference between arms).
+# Random-intercept mixed model per parameter (log scale), with the diet x visit interaction
 param_mixed <- box_data %>%
   group_by(parameter) %>% group_modify(~ mixed_visit_tests(.x, log_scale = TRUE)) %>% ungroup()
 param_tests <- param_wilcoxon %>% select(-label) %>% rename(p_wilcoxon = p) %>%
@@ -217,9 +164,7 @@ write_csv(param_tests, file.path(OUT_DIR, "diet_parameter_tests.csv"))
 cat("\n=== Wilcoxon and LMM side by side (estimates are log ratios, intervention vs baseline) ===\n")
 print(as.data.frame(param_tests %>% select(-label)), digits = 3)
 
-# One PDF per parameter, faceted by diet arm, annotated with the paired
-# Wilcoxon test above. Jitter is plain black (not colored by visit) so it stays
-# visible against the fill, matching the curve-derived metrics boxplots below.
+# One PDF per parameter, faceted by diet arm
 plot_param_boxplot <- function(param_name) {
   d <- box_data %>% filter(parameter == param_name)
   if (nrow(d) == 0) return(NULL)
@@ -230,7 +175,7 @@ plot_param_boxplot <- function(param_name) {
     geom_text(data = ann, aes(x = 1.5, y = Inf, label = label), vjust = 1.4, size = 2.8, inherit.aes = FALSE) +
     facet_wrap(vars(diet), nrow = 1, labeller = labeller(diet = DIET_LABELS)) +
     scale_x_discrete(labels = VISIT_LABELS) +
-    # ka spans a wide range with a long upper tail, so it is drawn on a log scale
+    # ka on a log axis
     (if (param_name == "ka") scale_y_log10(expand = expansion(mult = c(0.05, 0.15)))
      else scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))) +
     scale_fill_manual(values = VISIT_COLORS, labels = VISIT_LABELS, name = NULL) +
@@ -292,9 +237,7 @@ if (nrow(two_wave_completed) >= 4) {
 }
 
 # ---- Average concentration-time curves per diet x visit --------------------
-# Mirrors simulate_fit() in scripts/archive/fructose_independent/02_fit_erie_model_fructose_independent.R: the mechanism
-# the independent fit selected for each subject x visit determines the curve,
-# drawn here with the shared-kel ka, kel and F.
+# Wave structure, ka, kel and F from the shared-kel fit
 curve_matrix <- function(diet_val, vis, completed_only = TRUE) {
   sub <- (if (completed_only) summary_fits else reliable_fits) %>% filter(diet == diet_val, visit == vis)
   if (nrow(sub) == 0) return(NULL)
@@ -313,9 +256,7 @@ curve_matrix <- function(diet_val, vis, completed_only = TRUE) {
   conc_mat
 }
 
-# Pointwise Harrell-Davis median (rows = time points, columns = subjects): a
-# weighted average of the sorted subject values, so it changes smoothly where
-# subjects swap rank.
+# Pointwise Harrell-Davis median (rows = time points, columns = subjects)
 hd_median_rows <- function(m) {
   n <- ncol(m)
   w <- diff(pbeta(0:n / n, (n + 1) / 2, (n + 1) / 2))
@@ -349,8 +290,7 @@ average_curve <- function(diet_val, vis) {
   )
 }
 
-# Faceted by diet arm with baseline/intervention overlaid by colour, one PDF per
-# statistic (median with bootstrap CI band, mean with SEM band).
+# One PDF per statistic: median with bootstrap CI, mean with SEM
 CURVE_STATS <- list(
   median = list(cols = c("median_conc", "median_lo", "median_hi"), title = "Median fructose concentration (95% bootstrap CI)"),
   mean   = list(cols = c("mean_conc", "mean_lo", "mean_hi"),       title = "Mean fructose concentration (SEM band)")
@@ -414,10 +354,7 @@ write_csv(curve_metrics_summary, file.path(OUT_DIR, "diet_curve_metrics_summary.
 cat("\n=== Curve-derived metrics: median (IQR) per diet x visit ===\n")
 print(as.data.frame(curve_metrics_summary), digits = 3)
 
-# Paired Wilcoxon signed-rank test, baseline vs intervention within each arm
-# (subjects with both visits; needs >= 3 pairs). The signed differences are on
-# the log scale for AUC and Cmax and in minutes for Tmax, and no multiplicity
-# correction is applied.
+# Paired Wilcoxon within each arm (>= 3 pairs): log scale for AUC and Cmax, minutes for Tmax
 metric_deltas <- metrics_completed %>%
   pivot_longer(c(AUC, Cmax, Tmax), names_to = "metric", values_to = "value") %>%
   pivot_wider(names_from = visit, values_from = value) %>%

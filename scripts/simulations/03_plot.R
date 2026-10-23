@@ -1,47 +1,13 @@
 # =============================================================================
-# 08_plot_simulations.R - supplementary figure: independent fits vs one shared kel
-#
-# Reads the replicates written by 06_simulate_ka_kel_recovery.R (independent fits)
-# and 07_simulate_shared_kel.R (one kel per subject) and plots, per scenario:
-#   A  share of replicates where the paired Wilcoxon on ka gives p < 0.05 (95% Wilson CI)
-#   B  error in the fitted ka change: median fitted minus true log(ka intervention / ka baseline),
-#      median and 2.5-97.5 percentiles over replicates
-# No refitting: rerun 06 and 07 first when the fits change.
-# Output: results/03_diagnostics_ka_kel/simulation/simulation_figure.pdf (all scenarios) and
-#         simulation_figure_ka.pdf (no change and ka change only), each with a .png
+# simulations/03_plot.R - supplementary figure from the replicates of 01 and 02 (no refitting)
+#   A  share of replicates with p < 0.05 on ka (95% Wilson CI)
+#   B  error in the fitted log ka change (median, 2.5-97.5 percentiles)
+# Output: results/02_diagnostics_ka_kel/simulation/simulation_figure.pdf and simulation_figure_ka.pdf
 # =============================================================================
 suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(readr); library(ggplot2); library(grid); library(ggthemes); library(ggpubr) })
+source("scripts/assets/theme_publication.R")
 
-# House plotting theme (same as 03_diet_summary_shared_kel.R)
-theme_Publication <- function(base_size=14, base_family="sans") {
-    suppressWarnings(theme_foundation(base_size=base_size, base_family=base_family)
-        + theme(plot.title = element_text(face = "bold",
-                                          size = rel(1.0), hjust = 0.5),
-                text = element_text(),
-                panel.background = element_rect(colour = NA, fill = NA),
-                plot.background = element_rect(colour = NA, fill = NA),
-                panel.border = element_rect(colour = NA),
-                axis.title = element_text(face = "bold",size = rel(0.8)),
-                axis.title.y = element_text(angle=90, vjust =2),
-                axis.title.x = element_text(vjust = -0.2),
-                axis.text = element_text(size = rel(0.7)),
-                axis.text.x = element_text(angle = 0),
-                axis.line = element_line(colour="black"),
-                axis.ticks = element_line(),
-                panel.grid.major = element_line(colour="#f0f0f0"),
-                panel.grid.minor = element_blank(),
-                legend.key = element_rect(colour = NA),
-                legend.position = "bottom",
-                legend.key.size= unit(0.2, "cm"),
-                legend.spacing  = unit(0, "cm"),
-                plot.margin=unit(c(10,5,5,5),"mm"),
-                strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
-                strip.text = element_text(face="bold"),
-                plot.caption = element_text(size = rel(0.5), face = "italic")
-        ))
-}
-
-SIM_DIR <- "results/03_diagnostics_ka_kel/simulation"
+SIM_DIR <- "results/02_diagnostics_ka_kel/simulation"
 FIT_COLORS <- c(independent = "#2a78d6", shared = "#eb6834")
 FIT_LABELS <- c(independent = "Each visit fitted alone", shared = "One kel per subject")
 FIT_SHAPES <- c(independent = 16, shared = 17)

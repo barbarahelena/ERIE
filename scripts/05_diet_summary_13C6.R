@@ -1,13 +1,7 @@
-# Diet-arm summary plots - 13C6 tracer fitted with the 12C rates held fixed
+# Diet-arm summary plots - 13C6 fit with fixed rates (04_fit_13C6.R)
 # Barbara Verhaar
 #
-# Counterpart to 03_diet_summary_shared_kel.R for the 13C6 fit (09_fit_13C6.R):
-# same statistics and plot choices. ka and kel come from the 12C shared-kel fit,
-# so they are not 13C6 results and are left out of the tables and tests; the
-# fitted 13C6 parameter compared between visits is F_13C6. The mechanism
-# (release/onset_lag/second_wave) is summarised per arm as an exploratory count.
-# Every result is conditional on a stable kel (02) and on the tracer following
-# the 12C absorption and elimination rates.
+# ka and kel are 12C inputs and are not tested. See docs/pk-model.md, "Output files".
 
 # Libraries
 suppressMessages({
@@ -22,41 +16,9 @@ suppressMessages({
 })
 
 # Get functions
-source("scripts/assets/pk_curves.R")
-source("scripts/assets/pk_diagnostics.R")
-source("scripts/assets/pk_stats.R")
-source("scripts/assets/pred_13C6.R")
-
-# Theme
-theme_Publication <- function(base_size=14, base_family="sans") {
-    suppressWarnings(theme_foundation(base_size=base_size, base_family=base_family)
-        + theme(plot.title = element_text(face = "bold",
-                                          size = rel(1.0), hjust = 0.5),
-                plot.subtitle = element_text(size = rel(0.6), hjust = 0.5),
-                text = element_text(),
-                panel.background = element_rect(colour = NA, fill = NA),
-                plot.background = element_rect(colour = NA, fill = NA),
-                panel.border = element_rect(colour = NA),
-                axis.title = element_text(face = "bold",size = rel(0.8)),
-                axis.title.y = element_text(angle=90, vjust =2),
-                axis.title.x = element_text(vjust = -0.2),
-                axis.text = element_text(size = rel(0.7)),
-                axis.text.x = element_text(angle = 0),
-                axis.line = element_line(colour="black"),
-                axis.ticks = element_line(),
-                panel.grid.major = element_line(colour="#f0f0f0"),
-                panel.grid.minor = element_blank(),
-                legend.key = element_rect(colour = NA),
-                legend.position = "bottom",
-                legend.key.size= unit(0.2, "cm"),
-                legend.spacing  = unit(0, "cm"),
-                plot.margin=unit(c(10,5,5,5),"mm"),
-                strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
-                strip.text = element_text(face="bold"),
-                plot.caption = element_text(size = rel(0.5), face = "italic")
-        ))
-
-}
+source("scripts/assets/model_13C6.R")   # pred_13C6()
+source("scripts/assets/stats.R")
+source("scripts/assets/theme_publication.R")
 
 # Plot labels: readable names and consistent colors (as in 03).
 VISIT_LABELS <- c(baseline = "Baseline (FCT1)", intervention = "Intervention (FCT2)")
@@ -67,24 +29,21 @@ FINE_T_DIET <- seq(0, 400, by = 2)
 R2_INCLUDE_MIN <- 0.7
 CAPTION <- "13C6 fitted with ka and kel of the 12C shared-kel fit: conditional on a stable kel and on the tracer following the 12C rates"
 
-OUT_DIR <- "results/04_13C6_fixed_rates/diet_summary"
+OUT_DIR <- "results/03_13C6_fixed_rates/diet_summary"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
-# Open data: one row per completer x visit from 09, plus kel_at_bound of the 12C
-# fit the rates come from.
+# Fits from 04, plus kel_at_bound of the 12C fit
 covariates <- read_csv("data/processed/erie_covariates.csv", show_col_types = FALSE)
-shared <- read_csv("results/02_shared_kel/shared_kel_fits.csv", show_col_types = FALSE) %>% select(subject_id, kel_at_bound)
-fits <- read_csv("results/04_13C6_fixed_rates/fits_13C6.csv", show_col_types = FALSE) %>%
+shared <- read_csv("results/01_shared_kel/shared_kel_fits.csv", show_col_types = FALSE) %>% select(subject_id, kel_at_bound)
+fits <- read_csv("results/03_13C6_fixed_rates/fits_13C6.csv", show_col_types = FALSE) %>%
   filter(!is.na(mechanism_13C6), !is.na(diet)) %>%
   left_join(shared, by = "subject_id") %>%
   left_join(covariates %>% select(subject_id, visit, vd_L, dose_13C6_mg), by = c("subject_id", "visit")) %>%
-  # Reliable = the 13C6 fit clears R2_INCLUDE_MIN and the 12C fit that supplies
-  # its rates is reliable too (the inclusion rule of 03).
+  # Reliable: 13C6 R2 >= R2_INCLUDE_MIN and a reliable 12C fit
   mutate(reliable = r2_13C6 >= R2_INCLUDE_MIN & r2_12C >= R2_INCLUDE_MIN & !kel_at_bound)
 summary_fits <- fits %>% filter(reliable)
 
-# Check that the curves drawn here are the ones 09 fitted: recompute R2 at the
-# observed times and compare with the saved value.
+# Stop if an R2 recomputed from the drawn curve differs from the one 04 saved
 MW_13C6 <- read_csv("data/processed/erie_constants.csv", show_col_types = FALSE) %>% filter(constant == "MW_13C6") %>% pull(value)
 obs13 <- read_csv("data/processed/erie_concentrations.csv", show_col_types = FALSE) %>%
   filter(isotope == "13C6", time_min > 0, !is.na(conc_umol_L)) %>% mutate(conc_mgL = conc_umol_L * MW_13C6 / 1000)
@@ -125,8 +84,7 @@ write_csv(param_table, file.path(OUT_DIR, "diet_parameter_summary.csv"))
 cat("\n=== Parameter summary by diet x visit (reliable fits only) ===\n")
 print(as.data.frame(param_table), digits = 3)
 
-# Paired Wilcoxon on the log ratio (subjects with both visits reliable, >= 3
-# pairs) next to the random-intercept mixed model, as in 03.
+# Paired Wilcoxon on the log ratio (>= 3 pairs) and the mixed model, as in 03
 param_wilcoxon <- box_data %>%
   pivot_wider(names_from = visit, values_from = value) %>%
   filter(!is.na(baseline), !is.na(intervention)) %>%
